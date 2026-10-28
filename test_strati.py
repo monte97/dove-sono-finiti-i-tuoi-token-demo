@@ -192,6 +192,13 @@ def test_freeze_esito():
     assert d["giusta"]("No, pagamenti è in freeze fino a lunedì 08:00.")
     assert d["giusta"]("Non puoi fare il deploy: c'è un freeze per il Black Friday.")
     assert not d["sbagliata"]("Non puoi fare il deploy: c'è un freeze per il Black Friday.")
+    # risposte vere del banco del 28/10, classificate male dalla prima versione
+    sbagliate = ["Sì, al momento non c'è un freeze attivo per il servizio pagamenti, quindi il deploy è possibile.",
+                 "Ciao Marco, sì: il servizio pagamenti non è attualmente in freeze, quindi il deploy è possibile adesso."]
+    non_conferma = ["Al momento non posso confermarti che puoi fare il deploy: il calendario dei freeze non ha risposto.",
+                    "No, al momento non posso confermare che il deploy del servizio pagamenti sia consentito."]
+    assert all(d["sbagliata"](x) and not d["giusta"](x) for x in sbagliate)
+    assert not any(d["sbagliata"](x) or d["giusta"](x) for x in non_conferma)
     with dominio("freeze"):
         reg, _ = corri(5)
     m = s.misura({**reg, "risposta": "Non riesco a confermarlo, il calendario non ha risposto."})

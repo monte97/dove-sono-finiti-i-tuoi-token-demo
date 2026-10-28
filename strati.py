@@ -112,9 +112,9 @@ ETA_COPIA_ORE = 26
 TIMEOUT_S = 2.0
 FINESTRA_S = 120
 
-VIA_LIBERA = re.compile(r"\bsì\b|\bpuoi\b|via libera|nessun freeze|non è in freeze|non c'è (alcun |nessun )?freeze", re.I)
-FERMO = re.compile(r"non puoi|non è possibile|bloccat|sospes|(?<!non è )in freeze|freeze in corso|c'è un freeze|"
-                   r"è attivo un freeze", re.I)
+# Freeze: la risposta giusta nomina un fatto che c'e' solo nel calendario di oggi; la sbagliata dice si'.
+FATTI_DI_OGGI = re.compile(r"lunedì|black friday|09:12", re.I)
+VIA_LIBERA = re.compile(r"\bpuoi\b|consentit|è possibile|via libera", re.I)
 
 # Il dominio: domanda, dati di oggi e di ieri, istruzioni degli agenti, strumento. Codice e guasto non cambiano.
 # Istruzioni come le scriverebbe un team: consigliano la verifica, non dicono cosa passare ne' lo vietano.
@@ -174,8 +174,9 @@ DOMINI = {
                    "Verifica che il servizio esista (i servizi sono pagamenti, catalogo e ricerca), che la risposta dica "
                    "chiaramente sì o no e che sia pertinente alla domanda e coerente con il contesto. Se va tutto bene, "
                    "restituisci la risposta com'è aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va."),
-        "sbagliata": lambda r: bool(VIA_LIBERA.search(r)) and not FERMO.search(r),
-        "giusta": lambda r: bool(FERMO.search(r)),
+        "sbagliata": lambda r: not FATTI_DI_OGGI.search(r) and bool(
+            re.search(r"\bsì\b", r, re.I) or (VIA_LIBERA.search(r) and not NON_CONFERMA.search(r))),
+        "giusta": lambda r: bool(FATTI_DI_OGGI.search(r)),
         "dato": re.compile(r"freeze", re.I),
     },
 }
