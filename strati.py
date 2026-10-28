@@ -19,7 +19,7 @@ Strati (ognuno contiene i precedenti):
   python strati.py --riepilogo                     una riga per strato e modo
   python strati.py --righe                         righe di codice di ogni strato
 
-Le righe che esistono solo per osservare finiscono con il marcatore dello strato (# s0 ... # s5).
+Le righe che esistono solo per osservare finiscono con il marcatore dello strato (s0 ... s5 dopo il cancelletto).
 """
 
 import argparse
@@ -200,7 +200,7 @@ def esegui(guasto: bool, runner: bool, cartella: Path, client=None) -> dict:
     memoria.clear()
     client = client or cliente()
     stato = {"aperto_fino": 0.0, "guasto": guasto, "runner": runner, "fattura": []}
-    inizio = time.monotonic()
+    inizio = time.monotonic()  # s0
     with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
         span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
@@ -319,7 +319,7 @@ def verbale(span):
             print(f"{'chat ' + agente_di(s, per_id):<22} {attr(s, 'anthropic.message.stop_reason', ''):<11} "
                   f"{numeri:>20} {usd:>10.6f}")
         elif attr(s, "gen_ai.operation.name") == "execute_tool":
-            print(c(colore(s), f"{'strumento ' + attr(s, 'gen_ai.tool.name', '?'):<22} {'errore' if s['errore'] else 'ok':<11}"))
+            print(c(colore(s), f"{attr(s, 'gen_ai.tool.name', '?'):<22} {'errore' if s['errore'] else 'ok':<11}"))
             argomenti = attr(s, "gen_ai.tool.call.arguments")
             risultato = attr(s, "gen_ai.tool.call.result", attr(s, "anthropic.tool_result.content"))
             if argomenti or risultato:
@@ -360,9 +360,10 @@ def mostra(reg: dict, registrata: bool = False):
         return
     tracce = per_trace(span)
     print(c("grigio", f"\n{len(tracce)} trace per questa richiesta · {len(span)} span\n"))
+    t0 = min(x["inizio"] for x in span)
     for tid, ss in tracce.items():
-        if len(tracce) > 1:
-            print(c("grigio", f"trace {tid[:8]}"))
+        if len(tracce) > 1:  # come la lista di un backend: id e ora d'inizio, niente che le leghi
+            print(c("grigio", f"trace {tid[:8]}  inizia a +{min(x['inizio'] for x in ss) - t0:.1f} s"))
         albero(ss)
     if len(span) > 1 and len(tracce) == 1:
         print()
@@ -415,10 +416,10 @@ def riepilogo(cartella: Path):
 
 
 def righe():
-    """Le righe di codice di ogni strato, contate dai marcatori # sN."""
+    """Le righe di codice di ogni strato, contate dai marcatori sN dopo il cancelletto."""
     testo = Path(__file__).read_text().splitlines()
     for n in range(6):
-        marcate = [r for r in testo if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith(("#", '"'))]
+        marcate = [r for r in testo if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith("#")]
         print(f"strato {n} · {TITOLI[n]:<28} {len(marcate):>3} righe")
 
 
