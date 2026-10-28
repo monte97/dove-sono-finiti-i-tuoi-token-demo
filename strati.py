@@ -36,7 +36,7 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Status, StatusCode
@@ -48,10 +48,54 @@ TITOLI = {0: "oggi: un log e una fattura", 1: "l'SDK", 2: "gli agenti", 3: "lo s
           4: "la provenienza", 5: "il contenuto"}
 STRATO = 0
 
+EMAIL = re.compile(r"[\w.]+@[\w.]+\.\w+")
+MASCHERA = False
+
+
+class MascheraEmail(SpanProcessor):  # s5
+    """Toglie l'email da ogni attributo prima che lo span esca dal processo, anche dentro i JSON."""
+
+    def __init__(self, prossimo: SpanProcessor):  # s5
+        self.prossimo = prossimo  # s5
+
+    def on_start(self, span, parent_context=None):  # s5
+        self.prossimo.on_start(span, parent_context)  # s5
+
+    def on_end(self, span: ReadableSpan):  # s5
+        pulito = {k: senza_email(v) for k, v in span.attributes.items()}  # s5
+        self.prossimo.on_end(ReadableSpan(  # s5
+            name=span.name, context=span.context, parent=span.parent, resource=span.resource,  # s5
+            attributes=pulito, events=span.events, links=span.links, kind=span.kind, status=span.status,  # s5
+            start_time=span.start_time, end_time=span.end_time, instrumentation_scope=span.instrumentation_scope))  # s5
+
+    def shutdown(self):  # s5
+        self.prossimo.shutdown()  # s5
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:  # s5
+        return self.prossimo.force_flush(timeout_millis)  # s5
+
+
+def senza_email(v):  # s5
+    if isinstance(v, str):  # s5
+        return EMAIL.sub("[email]", v)  # s5
+    return tuple(senza_email(x) for x in v) if isinstance(v, (list, tuple)) else v  # s5
+
+
 memoria = InMemorySpanExporter()  # s1  ponytail: in memoria; dal vivo un exporter OTLP verso un backend
-provider = TracerProvider()  # s1
-provider.add_span_processor(SimpleSpanProcessor(memoria))  # s1
-_vero, _spento = provider.get_tracer("osservare-a-strati"), trace.NoOpTracer()
+_spento = trace.NoOpTracer()
+
+
+def fai_provider(maschera: bool) -> TracerProvider:
+    """Un provider per client: con la maschera, gli span passano da MascheraEmail prima dell'exporter."""
+    global _vero
+    provider = TracerProvider()  # s1
+    processore = SimpleSpanProcessor(memoria)  # s1
+    provider.add_span_processor(MascheraEmail(processore) if maschera else processore)  # s1
+    _vero = provider.get_tracer("osservare-a-strati")
+    return provider
+
+
+fai_provider(False)  # il tracer esiste anche prima del primo client
 
 
 def tracer(n: int):
@@ -275,7 +319,7 @@ def cliente(**prova):
     if STRATO == 0:
         return anthropic.Anthropic(open_telemetry=False, **prova)
     modo = "content" if STRATO >= 5 else "metadata_only"  # s5
-    return anthropic.Anthropic(open_telemetry={"tracer_provider": provider,  # s1
+    return anthropic.Anthropic(open_telemetry={"tracer_provider": fai_provider(MASCHERA),  # s1
                                                "traces": {"content_mode": modo}}, **prova)  # s1
 
 
@@ -307,7 +351,7 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
-    reg = {"strato": STRATO, "dominio": nome_dominio(), "correzione": CORREZIONE, "registrata": ora.isoformat(timespec="seconds"),
+    reg = {"strato": STRATO, "dominio": nome_dominio(), "correzione": CORREZIONE, "maschera": MASCHERA, "registrata": ora.isoformat(timespec="seconds"),
            "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMINIO["domanda"], "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
@@ -322,7 +366,6 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
 # --- stampa: la stessa per le run dal vivo e per quelle registrate, e mostra solo cio' che c'e' ---
 
 COLORI = {"rosso": 31, "verde": 32, "giallo": 33, "ciano": 36, "grigio": 90, "inverso": 7}
-EMAIL = re.compile(r"[\w.]+@[\w.]+\.\w+")
 
 
 def c(colore: str, testo: str) -> str:
@@ -634,6 +677,7 @@ if __name__ == "__main__":
     p.add_argument("--dominio", choices=list(DOMINI), default="orario")
     p.add_argument("--correzione", action="store_true", help="lo strumento dice quanto e' vecchio il dato")
     p.add_argument("--correzione-completa", action="store_true", help="...e valida sa cosa farne")
+    p.add_argument("--maschera", action="store_true", help="solo con --strato 5: l'email non esce dagli span")
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
@@ -649,10 +693,12 @@ if __name__ == "__main__":
     elif a.replay:
         mostra(json.loads(Path(a.replay).read_text()), registrata=True)
     else:
-        STRATO, DOMINIO = a.strato, DOMINI[a.dominio]
+        if a.maschera and a.strato != 5:
+            raise SystemExit("--maschera serve allo strato 5, dove il contenuto entra negli span")
+        STRATO, DOMINIO, MASCHERA = a.strato, DOMINI[a.dominio], a.maschera
         CORREZIONE = 2 if a.correzione_completa else 1 if a.correzione else 0
         a.guasto = a.guasto or CORREZIONE > 0  # la correzione ha senso solo con il guasto
-        coda = ["", "-correzione", "-correzione-completa"][CORREZIONE]
+        coda = ["", "-correzione", "-correzione-completa"][CORREZIONE] + ("-maschera" if MASCHERA else "")
         cartella = QUI / "registrazioni" / f"strato-{a.strato}{DOMINIO['cartella']}{coda}"
         if a.banco:
             banco([esegui(a.guasto, cartella) for _ in range(a.banco)])

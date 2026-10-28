@@ -44,7 +44,7 @@ def risposta_finta(richiesta):
         return httpx.Response(200, headers=INTESTAZIONI,
                               json={**base, "stop_reason": "end_turn", "content": [pensiero, {"type": "text", "text": testo}]})
 
-    domanda = "A che ora è il workshop Kubernetes da zero?"
+    domanda = s.DOMINIO["domanda"]  # con l'email: coordina la passa a valida, come nelle run vere
     if "cerca" in strumenti:  # coordina
         if precedente is None:
             return chiama("cerca", {"richiesta": "Kubernetes da zero"})
@@ -227,6 +227,20 @@ def test_correzione_l_eta_arriva_a_cerca():
         assert istruzioni_di("va confermato.") and reg["correzione"] == 2
     finally:
         s.CORREZIONE = 0
+
+
+def test_maschera_email():
+    try:
+        s.MASCHERA = True
+        reg, fuori = corri(5)
+    finally:
+        s.MASCHERA = False
+    assert s.con_email(reg["span"]) == 0 and "email dell'utente" not in fuori
+    assert any("[email]" in (x["attributi"].get("gen_ai.input.messages") or "") for x in reg["span"])
+    assert "[email]" in attributi(reg, "execute_tool valida")["gen_ai.tool.call.arguments"]  # anche dentro il JSON
+    assert all(reg["span"][0]["attributi"][k] == "oscurato" for k in s.ID_ACCOUNT)
+    reg, _ = corri(5)
+    assert s.con_email(reg["span"]) > 0  # senza maschera l'email resta
 
 
 def test_replay_registrazione_dello_spike():
