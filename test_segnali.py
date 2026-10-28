@@ -65,6 +65,8 @@ def test_segnali_di_una_run():
 def test_sotto_lo_strato_minimo_non_si_misura():
     g = sg.segnali({**RUN, "strato": 3})
     assert g["copia"] is None and g["verdetti"] == [True]
+    g = sg.segnali({**RUN, "strato": 2})  # allo strato 2 gli strumenti di dati non hanno span: «nessuno» mentirebbe
+    assert g["chiamate"] is None and g["forma"] is not None
     g = sg.segnali({**RUN, "strato": 1})
     assert g["chiamate"] is None and g["forma"] is None and g["verdetti"] is None and g["costo"] is not None
 
@@ -118,6 +120,9 @@ def test_stampa_dice_cosa_manca():
         sg.stampa("strato-1 · guasto", sg.cruscotto(leggi("strato-1")))
     testo = fuori.getvalue()
     assert "95° percentile" in testo and "serve lo strato 4" in testo and "serve lo strato 3" in testo
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        sg.stampa("strato-5-freeze · guasto", sg.cruscotto(leggi("strato-5-freeze")))
+    assert "richiamati" in fuori.getvalue() and "leggi_calendario in 22 run" in fuori.getvalue()
 
 
 if __name__ == "__main__":

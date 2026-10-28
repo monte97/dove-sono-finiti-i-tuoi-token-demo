@@ -8,7 +8,8 @@ import statistics
 import strati as s
 
 # lo strato da cui ogni segnale si puo' misurare: sotto, gli span che servono non esistono
-MINIMO = {"ritenta": 2, "forma": 2, "approva": 3, "copia": 4, "costo": 1}
+# (gli archi fra agenti ci sono dallo strato 2, ma gli strumenti di dati solo dal 3)
+MINIMO = {"ritenta": 3, "forma": 2, "approva": 3, "copia": 4, "costo": 1}
 
 
 def p95(costi: list[float]) -> float:
@@ -49,8 +50,9 @@ def stampa(titolo: str, c: dict):
     manca = lambda segnale: f"— serve lo strato {MINIMO[segnale]}"
     print(f"{titolo} · {c['n']} richieste")
     r = c["ritenta"]
-    print(f"  {'ritentano':<18} " + (manca("ritenta") if r is None else " · ".join(
-        f"{nome} {n}" for nome, n in sorted(r.items(), key=lambda kv: -kv[1])) or "nessuno"))
+    # «richiamati», non «ritentati»: conta le run in cui uno strumento e' chiamato almeno due volte, errore o no
+    print(f"  {'richiamati':<18} " + (manca("ritenta") if r is None else " · ".join(
+        f"{nome} in {n} run" for nome, n in sorted(r.items(), key=lambda kv: -kv[1])) or "nessuno"))
     f = c["forme"]
     print(f"  {"forme dell'albero":<18} " + (manca("forma") if f is None else
                                                f"{len(f)} (la più frequente in {f.most_common(1)[0][1]} run)"))
