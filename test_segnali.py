@@ -2,7 +2,6 @@
 import contextlib
 import io
 import json
-import statistics
 from pathlib import Path
 
 import segnali as sg
@@ -86,8 +85,21 @@ def test_p95_e_valida_mai_chiamata():
     c = sg.cruscotto([senza_valida])
     assert c["approva"] == (0, 0)  # misurabile, e zero: non None
     costi = [0.001 * i for i in range(1, 21)]
-    assert sg.p95(costi) == statistics.quantiles(costi, n=20, method="inclusive")[18]
+    assert sg.p95(costi) == sorted(costi)[round(19 * 0.95)]
     assert sg.p95([0.5]) == 0.5
+
+
+def test_p95_come_grafana():
+    costi = [0.001 * i for i in range(1, 31)]
+    assert sg.p95(costi) == sorted(costi)[round(29 * 0.95)]
+    assert sg.p95([0.5]) == 0.5
+
+
+def test_riassunto_della_run():
+    assert sg.riassunto(RUN) == {"richiesta.forma": " ".join(s.grafo(RUN["span"])),
+                                 "richiesta.costo_microusd": round((s.costo(1000, 0, 50) + s.costo(2000, 1000, 100)) * 1e6),
+                                 "richiesta.richiamati": "cerca leggi_programma", "richiesta.copia_vecchia": True}
+    assert set(sg.riassunto({**RUN, "strato": 1})) == {"richiesta.costo_microusd"}
 
 
 def test_strato_misto_rende_none():

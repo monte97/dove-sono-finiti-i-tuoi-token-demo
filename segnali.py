@@ -13,7 +13,8 @@ MINIMO = {"ritenta": 3, "forma": 2, "approva": 3, "copia": 4, "costo": 1}
 
 
 def p95(costi: list[float]) -> float:
-    return statistics.quantiles(costi, n=20, method="inclusive")[18] if len(costi) > 1 else costi[0]
+    """Come il calcolo p95 di Grafana: il valore ordinato di posto round((n-1)*0.95), senza interpolare."""
+    return sorted(costi)[round((len(costi) - 1) * 0.95)]
 
 
 def segnali(r: dict) -> dict:
@@ -29,6 +30,20 @@ def segnali(r: dict) -> dict:
         "copia": se("copia", lambda: any(x["nome"] == "cache.read" for x in span)),
         "costo": se("costo", lambda: sum(s.costo(t["in"], t["cache"], t["out"]) for x in span if (t := s.token(x)))),
     }
+
+
+def riassunto(r: dict) -> dict:
+    """I fatti per richiesta da scrivere sullo span radice: TraceQL conta span, non trace."""
+    g, fuori = segnali(r), {}
+    if g["forma"] is not None:
+        fuori["richiesta.forma"] = g["forma"]
+    if g["costo"] is not None:
+        fuori["richiesta.costo_microusd"] = round(g["costo"] * 1e6)
+    if g["chiamate"] is not None:
+        fuori["richiesta.richiamati"] = " ".join(sorted(nome for nome, n in g["chiamate"].items() if n >= 2))
+    if g["copia"] is not None:
+        fuori["richiesta.copia_vecchia"] = g["copia"]
+    return fuori
 
 
 def cruscotto(regs: list[dict]) -> dict:
