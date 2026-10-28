@@ -60,12 +60,12 @@ def risposta_finta(richiesta):
     return rispondi("Oggi alle 15:00, sala B.\n\nVerificato.")
 
 
-def corri(strato, guasto=True, runner=False, variante="fissa"):
+def corri(strato, guasto=True):
     s.STRATO = strato
     http = httpx.Client(transport=httpx.MockTransport(risposta_finta))
     client = s.cliente(api_key="finta", http_client=http)
     with contextlib.redirect_stdout(io.StringIO()) as fuori:
-        reg = s.esegui(guasto, runner, CARTELLA, client=client, variante=variante)
+        reg = s.esegui(guasto, CARTELLA, client=client)
         s.mostra(reg)
     return reg, re.sub(r"\033\[\d+m", "", fuori.getvalue())  # senza colori
 
@@ -74,30 +74,46 @@ def nomi(reg):
     return [x["nome"] for x in reg["span"]]
 
 
+def padre_di(reg, nome):
+    per_id = {x["id"]: x for x in reg["span"]}
+    return per_id[next(x for x in reg["span"] if x["nome"] == nome)["padre"]]["nome"]
+
+
+def attributi(reg, nome):
+    return next(x for x in reg["span"] if x["nome"] == nome)["attributi"]
+
+
+# coordina chiama cerca; cerca: timeout, ritenta, risponde; coordina chiama valida; valida risponde; coordina risponde
+CHIAMATE = 7
+
+
 def test_strato_0_solo_log_e_fattura():
     reg, fuori = corri(0)
-    assert reg["span"] == [] and reg["fattura"]["chiamate"] == 4  # cerca: timeout, ritenta, risponde; valida: 1
+    assert reg["span"] == [] and reg["fattura"]["chiamate"] == CHIAMATE
     assert "200 in" in fuori and "fattura:" in fuori and "trace" not in fuori
-    assert not any("traceparent" in h for h in VISTE[-4:])
+    assert not any("traceparent" in h for h in VISTE[-CHIAMATE:])
 
 
 def test_strato_1_una_trace_per_chiamata_e_niente_contenuto():
     reg, fuori = corri(1)
-    assert nomi(reg) == ["anthropic.messages.create"] * 4
-    assert s.esito(reg)["tracce"] == 4
+    assert nomi(reg) == ["anthropic.messages.create"] * CHIAMATE
+    assert s.esito(reg)["tracce"] == CHIAMATE
     a = reg["span"][0]["attributi"]
     assert a["gen_ai.operation.name"] == "chat" and a["anthropic.message.stop_reason"] == "tool_use"
     assert "gen_ai.response.finish_reasons" not in a and "gen_ai.input.messages" not in a
     assert all(a[k] == "oscurato" for k in s.ID_ACCOUNT)
     assert "org-finta" not in fuori and "chat ?" in fuori  # di chi sia la chiamata non si sa
-    assert all("traceparent" in h for h in VISTE[-4:])  # l'SDK manda il contesto della trace al provider
+    assert all("traceparent" in h for h in VISTE[-CHIAMATE:])  # l'SDK manda il contesto della trace al provider
 
 
-def test_strato_2_una_trace_sola():
+def test_strato_2_una_trace_sola_e_il_grafo():
     reg, _ = corri(2)
     assert s.esito(reg)["tracce"] == 1
     assert nomi(reg)[-1] == "invoke_workflow assistente-evento"
-    assert "execute_tool leggi_programma" not in nomi(reg)
+    assert "execute_tool leggi_programma" not in nomi(reg)  # lo strumento dei dati resta dello strato 3
+    for arco in ("execute_tool cerca", "execute_tool valida"):  # gli archi fra agenti sono dello strato 2
+        a = attributi(reg, arco)
+        assert "gen_ai.tool.call.arguments" not in a and a["gen_ai.transfer.target.name"] == arco.split()[-1]
 
 
 def test_strato_3_lo_strumento_ma_non_la_copia():
@@ -105,6 +121,7 @@ def test_strato_3_lo_strumento_ma_non_la_copia():
     strumenti = [x for x in reg["span"] if x["nome"] == "execute_tool leggi_programma"]
     assert [x["errore"] for x in strumenti] == [True, False]
     assert "15:00" in strumenti[1]["attributi"]["gen_ai.tool.call.result"]
+    assert "gen_ai.tool.call.arguments" in attributi(reg, "execute_tool valida")  # gli argomenti fra agenti sono un prompt
     assert "cache.read" not in nomi(reg)
 
 
@@ -112,24 +129,13 @@ def test_strato_4_la_copia_ha_un_eta():
     reg, fuori = corri(4)
     cache = [x for x in reg["span"] if x["nome"] == "cache.read"]
     assert cache[0]["attributi"]["cache.age_hours"] == 26 and "età 26 ore" in fuori
-    assert s.con_email(reg["span"]) == 0
 
 
 def test_strato_5_il_contenuto_e_l_email():
     reg, fuori = corri(5)
     assert any("gen_ai.input.messages" in x["attributi"] for x in reg["span"])
-    assert "pensiero di cerca: Devo leggere il programma." in fuori
+    assert "pensiero di coordina: Devo leggere il programma." in fuori
     assert s.con_email(reg["span"]) > 0 and "email dell'utente" in fuori
-
-
-def test_strato_1_con_il_tool_runner():
-    reg, _ = corri(1, runner=True)
-    n = nomi(reg)
-    assert n.count("anthropic.messages.tool_runner") == 2 and n.count("anthropic.custom_tool_use leggi_programma") == 2
-    assert s.esito(reg)["tracce"] == 2  # una per agente: il runner fa da radice, ma il workflow manca
-    strumento = next(x for x in reg["span"] if x["nome"].startswith("anthropic.custom_tool_use"))
-    assert strumento["errore"] and strumento["attributi"]["error.type"] == "tool_error"
-    assert "gen_ai.tool.call.arguments" not in strumento["attributi"]  # senza content_mode niente argomenti
 
 
 def test_sana_niente_copia():
@@ -138,49 +144,25 @@ def test_sana_niente_copia():
     assert len(strumenti) == 1 and not strumenti[0]["errore"] and "cache.read" not in nomi(reg)
 
 
-def padre_di(reg, nome):
-    per_id = {x["id"]: x for x in reg["span"]}
-    return per_id[next(x for x in reg["span"] if x["nome"] == nome)["padre"]]["nome"]
-
-
-def test_variante_a_agente_come_strumento():
-    reg, fuori = corri(5, variante="A")
-    assert padre_di(reg, "invoke_agent valida") == "execute_tool chiedi_verifica"
-    assert padre_di(reg, "execute_tool chiedi_verifica") == "invoke_agent cerca"
-    passaggio = next(x for x in reg["span"] if x["nome"] == "execute_tool chiedi_verifica")["attributi"]
-    assert passaggio["gen_ai.agent.name"] == "cerca" and passaggio["gen_ai.transfer.target.name"] == "valida"
-    assert passaggio["gen_ai.transfer.mode"] == "return_to_caller"
-    m = s.misura(reg)
-    assert m["grafo"] == ("codice>cerca cerca>leggi_programma! cerca>leggi_programma cerca>chiedi_verifica")
-    assert m["riprove"] == 1 and m["valida"] == 1 and m["contesto"] == 1 and m["ora"] == "15:00"
-    assert m["valida_vede_dato"] == 1 and m["valida_vede_eta"] == 0
-    assert not m["verificato"] and "variante A" in fuori  # l'approvazione resta nella trace
-
-
-def test_variante_b_orchestratore():
-    reg, _ = corri(5, variante="B")
+def test_orchestratore_grafo():
+    reg, _ = corri(5)
     assert padre_di(reg, "invoke_agent cerca") == "execute_tool cerca"
     assert padre_di(reg, "invoke_agent valida") == "execute_tool valida"
     assert padre_di(reg, "execute_tool leggi_programma") == "invoke_agent cerca"
+    passaggio = attributi(reg, "execute_tool valida")
+    assert passaggio["gen_ai.agent.name"] == "coordina" and passaggio["gen_ai.transfer.mode"] == "return_to_caller"
     m = s.misura(reg)
     assert m["grafo"] == ("codice>coordina coordina>cerca cerca>leggi_programma! cerca>leggi_programma "
                           "coordina>valida")
     assert m["profondita"] == 6 and m["contesto"] == 0 and m["verificato"]
 
 
-def test_strato_2_le_varianti_mostrano_il_grafo_senza_argomenti():
-    for variante, passaggio in (("A", "execute_tool chiedi_verifica"), ("B", "execute_tool valida")):
-        reg, _ = corri(2, variante=variante)
-        assert s.esito(reg)["tracce"] == 1 and passaggio in nomi(reg)
-        assert "execute_tool leggi_programma" not in nomi(reg)  # lo strumento dei dati resta dello strato 3
-        a = next(x for x in reg["span"] if x["nome"] == passaggio)["attributi"]
-        assert "gen_ai.tool.call.arguments" not in a and a["gen_ai.transfer.target.name"] == "valida"
-
-
-def test_strato_4_varianti_la_copia_ha_un_eta():
-    for variante in ("A", "B"):
-        reg, fuori = corri(4, variante=variante)
-        assert "cache.read" in nomi(reg) and "età 26 ore" in fuori
+def test_replay_registrazione_dello_spike():
+    reg, _ = corri(3)
+    vecchia = {**json.loads(json.dumps(reg)), "variante": "A"}  # come le registrazioni nel tag spike-a-b
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        s.mostra(vecchia, registrata=True)
+    assert "variante A" in fuori.getvalue().splitlines()[0]
 
 
 def test_replay_riepilogo_righe():

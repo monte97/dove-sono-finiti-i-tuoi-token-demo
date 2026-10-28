@@ -1,33 +1,28 @@
 """La stessa risposta sbagliata, osservata uno strato alla volta.
 
-Due agenti: `cerca` legge il programma con lo strumento `leggi_programma`, `valida` controlla
-la risposta. Il servizio del programma e' simulato e il difetto e' messo apposta: dopo un timeout
-lo strumento serve per 120 s la copia di ieri (15:00 invece di 14:00).
-
-Tre varianti, stesso dominio e stesso guasto:
-  fissa  il passaggio da cerca a valida e' scritto nel codice; valida vede solo il testo di cerca
-  A      agente come strumento: cerca ha anche lo strumento chiedi_verifica, che invoca valida;
-         se chiamarla e cosa passarle lo decide il modello
-  B      orchestratore: l'agente coordina ha come strumenti gli agenti cerca e valida e decide
-         lui chi chiamare, in che ordine, cosa passare e quando rispondere
+Tre agenti. `coordina` e' l'orchestratore: ha come strumenti gli agenti `cerca` e `valida` e decide
+lui chi chiamare, in che ordine, cosa passare e quando rispondere. `cerca` legge il programma con lo
+strumento `leggi_programma`, `valida` controlla una risposta prima che arrivi all'utente. Il servizio
+del programma e' simulato e il difetto e' messo apposta: dopo un timeout lo strumento serve per 120 s
+la copia di ieri (15:00 invece di 14:00).
 
 Strati (ognuno contiene i precedenti):
   0  oggi: una riga di log e la fattura, niente OpenTelemetry
   1  l'SDK: la strumentazione nativa di anthropic, nient'altro
-  2  la radice: span invoke_workflow e invoke_agent scritti a mano
+  2  gli agenti: span invoke_workflow, invoke_agent e gli archi fra agenti, scritti a mano
   3  lo strumento: span execute_tool con argomenti, risultato, timeout
   4  la provenienza: span cache.read con eta' e motivo della copia
   5  il contenuto: content_mode "content" (messaggi e ragionamento riassunto)
 
   python strati.py --strato 3 --guasto             una run
   python strati.py --strato 3 --guasto --banco 5   cinque run, una riga ciascuna
-  python strati.py --strato 1 --runner --guasto    strato 1 con il tool runner dell'SDK
-  python strati.py --strato 5 --variante A --guasto  agente come strumento (B: orchestratore)
   python strati.py --replay registrazioni/strato-3/<file>.json
   python strati.py --riepilogo                     una riga per strato e modo
+  python strati.py --misure 5                      grafo, riprove, verifiche e risposte dello strato 5
   python strati.py --righe                         righe di codice di ogni strato
 
 Le righe che esistono solo per osservare finiscono con il marcatore dello strato (s0 ... s5 dopo il cancelletto).
+La pipeline fissa, la variante A (agente come strumento) e il tool runner sono nel tag git spike-a-b.
 """
 
 import argparse
@@ -49,7 +44,7 @@ from opentelemetry.trace import Status, StatusCode
 QUI = Path(__file__).parent
 load_dotenv(QUI / ".env")
 
-TITOLI = {0: "oggi: un log e una fattura", 1: "l'SDK", 2: "la radice", 3: "lo strumento",
+TITOLI = {0: "oggi: un log e una fattura", 1: "l'SDK", 2: "gli agenti", 3: "lo strumento",
           4: "la provenienza", 5: "il contenuto"}
 STRATO = 0
 
@@ -80,38 +75,26 @@ FINESTRA_S = 120
 
 CERCA = ("Sei l'assistente di DevFest Immaginario 2026. Per gli orari usa sempre lo strumento "
          "leggi_programma. Rispondi in una riga con giorno, ora e sala.")
-VALIDA = ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino "
-          "all'utente. Ricevi la domanda e la risposta. Verifica che l'orario sia valido, che la sala "
-          "esista (le sale sono A, B e C) e che la risposta sia pertinente alla domanda. Se va tutto "
-          "bene, restituisci la risposta com'è aggiungendo in fondo «Verificato.». Altrimenti spiega "
-          "cosa non va.")
 SCHEMA = {"name": "leggi_programma",
           "description": "Legge dal servizio del programma giorno, ora e sala di una sessione dell'evento.",
           "input_schema": {"type": "object", "required": ["sessione"],
                            "properties": {"sessione": {"type": "string", "description": "titolo della sessione"}}}}
 
-# --- varianti A e B: il grafo fra agenti lo decide il modello ---
 # Istruzioni come le scriverebbe un team: consigliano la verifica, non dicono cosa passare ne' lo vietano.
-CERCA_A = ("Sei l'assistente di DevFest Immaginario 2026. Per gli orari usa sempre lo strumento "
-           "leggi_programma. Prima di rispondere all'utente, fai controllare la risposta con lo strumento "
-           "chiedi_verifica. Rispondi in una riga con giorno, ora e sala.")
 COORDINA = ("Sei l'assistente di DevFest Immaginario 2026 e coordini due agenti: cerca trova le informazioni "
             "sul programma dell'evento, valida controlla una risposta prima che arrivi all'utente. Prima di "
             "rispondere all'utente, fai controllare la risposta da valida. Rispondi in una riga con giorno, ora e sala.")
-VALIDA_AGENTI = ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino "
-                 "all'utente. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che "
-                 "l'orario sia valido, che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente "
-                 "alla domanda e coerente con il contesto. Se va tutto bene, restituisci la risposta com'è "
-                 "aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va.")
+VALIDA = ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino "
+          "all'utente. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che "
+          "l'orario sia valido, che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente "
+          "alla domanda e coerente con il contesto. Se va tutto bene, restituisci la risposta com'è "
+          "aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va.")
 _VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
              "properties": {"domanda": {"type": "string", "description": "la domanda dell'utente"},
                             "risposta": {"type": "string", "description": "la risposta da controllare"},
                             "contesto": {"type": "string", "description": "informazioni utili alla verifica (facoltativo)"}}}
 SCHEMI = {
     "leggi_programma": SCHEMA,
-    "chiedi_verifica": {"name": "chiedi_verifica", "input_schema": _VERIFICA,
-                        "description": "Chiede all'agente valida di controllare una risposta prima che arrivi "
-                                       "all'utente. Restituisce la risposta verificata oppure cosa non va."},
     "valida": {"name": "valida", "input_schema": _VERIFICA,
                "description": "Agente che controlla una risposta prima che arrivi all'utente. Restituisce la "
                               "risposta verificata oppure cosa non va."},
@@ -122,8 +105,7 @@ SCHEMI = {
                                "properties": {"richiesta": {"type": "string", "description": "cosa cercare"}}}},
 }
 # strumento -> (agente invocato, sue istruzioni, suoi strumenti)
-AGENTI_STRUMENTO = {"chiedi_verifica": ("valida", VALIDA_AGENTI, []),
-                    "valida": ("valida", VALIDA_AGENTI, []),
+AGENTI_STRUMENTO = {"valida": ("valida", VALIDA, []),
                     "cerca": ("cerca", CERCA, ["leggi_programma"])}
 PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del ragionamento torna solo se lo chiedi
 
@@ -215,35 +197,11 @@ def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strum
     raise RuntimeError(f"oltre {MAX_GIRI} giri")
 
 
-def ciclo_runner(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list):
-    """Variante dello strato 1: il ciclo lo fa il tool runner dell'SDK, che apre da se' invoke_agent ed execute_tool."""
-    @anthropic.beta_tool(name="leggi_programma", description=SCHEMA["description"])
-    def strumento(sessione: str) -> str:
-        """Legge giorno, ora e sala di una sessione.
-
-        Args:
-            sessione: titolo della sessione
-        """
-        try:
-            return json.dumps(leggi_programma(sessione, stato), ensure_ascii=False)
-        except TimeoutError as e:
-            raise anthropic.lib.tools.ToolError(f"Errore: {e}.") from e
-
-    runner = client.beta.messages.tool_runner(model=MODEL, max_tokens=4096, system=istruzioni, thinking=PENSIERO,
-                                              messages=[{"role": "user", "content": richiesta}],
-                                              tools=[strumento] if strumenti else [], max_iterations=MAX_GIRI)
-    ultimo = None
-    for ultimo in runner:
-        stato["fattura"].append(ultimo.usage)  # s0
-    return "".join(b.text for b in ultimo.content if b.type == "text")
-
-
 def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list) -> str:
     with tracer(2).start_as_current_span(f"invoke_agent {nome}") as span:  # s2
         span.set_attributes({"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": nome,  # s2
                              "gen_ai.request.model": MODEL})  # s2
-        giro = ciclo_runner if stato["runner"] else ciclo
-        return giro(client, nome, istruzioni, richiesta, stato, strumenti)
+        return ciclo(client, nome, istruzioni, richiesta, stato, strumenti)
 
 
 def cliente(**prova):
@@ -269,26 +227,20 @@ def in_dict(s) -> dict:
             "errore": s.status.status_code == StatusCode.ERROR, "attributi": attributi}
 
 
-def esegui(guasto: bool, runner: bool, cartella: Path, client=None, variante: str = "fissa") -> dict:
+def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     memoria.clear()
     client = client or cliente()
-    stato = {"aperto_fino": 0.0, "guasto": guasto, "runner": runner, "fattura": []}
+    stato = {"aperto_fino": 0.0, "guasto": guasto, "fattura": []}
     inizio = time.monotonic()  # s0
     with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
         span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
-        if variante == "A":  # cerca decide se e come chiamare valida
-            risposta = agente(client, "cerca", CERCA_A, DOMANDA, stato, ["leggi_programma", "chiedi_verifica"])
-        elif variante == "B":  # coordina decide chi chiamare, in che ordine e cosa passare
-            risposta = agente(client, "coordina", COORDINA, DOMANDA, stato, ["cerca", "valida"])
-        else:  # fissa: il grafo lo scrive il codice
-            bozza = agente(client, "cerca", CERCA, DOMANDA, stato, ["leggi_programma"])
-            risposta = agente(client, "valida", VALIDA, f"Domanda: {DOMANDA}\nRisposta dell'assistente: {bozza}",
-                              stato, [])
+        # coordina decide chi chiamare, in che ordine e cosa passare
+        risposta = agente(client, "coordina", COORDINA, DOMANDA, stato, ["cerca", "valida"])
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
-    reg = {"strato": STRATO, "variante": "runner" if runner else (None if variante == "fissa" else variante), "registrata": ora.isoformat(timespec="seconds"),
+    reg = {"strato": STRATO, "registrata": ora.isoformat(timespec="seconds"),
            "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
@@ -538,8 +490,6 @@ def misura(r: dict) -> dict:
     trasferimenti = [json.loads(attr(s, "gen_ai.tool.call.arguments") or "{}") for s in archi
                      if attr(s, "gen_ai.transfer.target.name") == "valida"]
     verdetti = [attr(s, "gen_ai.tool.call.result") or "" for s in archi if attr(s, "gen_ai.transfer.target.name") == "valida"]
-    if not verdetti:  # pipeline fissa: il verdetto di valida e' la risposta
-        verdetti = [risposta] if valide else []
     contesti = [a.get("contesto", "") for a in trasferimenti]
     return {**esito(r), "grafo": " ".join(passi), "profondita": max(livelli) + 1 if livelli else 0,
             "riprove": 0 if primo_errore is None else sum(i > primo_errore for i in leggi),
@@ -604,30 +554,24 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--strato", type=int, choices=range(6), default=0)
     p.add_argument("--guasto", action="store_true")
-    p.add_argument("--runner", action="store_true", help="solo con --strato 1: il ciclo lo fa il tool runner dell'SDK")
-    p.add_argument("--variante", choices=["fissa", "A", "B"], default="fissa",
-                   help="A: agente come strumento; B: orchestratore")
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
-    p.add_argument("--misure", type=int, metavar="STRATO", help="grafo, riprove, verifiche e risposte per variante")
+    p.add_argument("--misure", type=int, metavar="STRATO", help="grafo, riprove, verifiche e risposte di uno strato")
     p.add_argument("--righe", action="store_true")
     a = p.parse_args()
     if a.righe:
         righe()
     elif a.misure is not None:
-        misure([QUI / "registrazioni" / f"strato-{a.misure}{v}" for v in ("", "-A", "-B")])
+        misure(sorted(QUI.glob(f"registrazioni/strato-{a.misure}*")))
     elif a.riepilogo:
         riepilogo(QUI / "registrazioni")
     elif a.replay:
         mostra(json.loads(Path(a.replay).read_text()), registrata=True)
     else:
-        if a.runner and (a.strato != 1 or a.variante != "fissa"):
-            raise SystemExit("--runner si confronta con lo strato 1 della pipeline fissa")
         STRATO = a.strato
-        coda = "-runner" if a.runner else ("" if a.variante == "fissa" else f"-{a.variante}")
-        cartella = QUI / "registrazioni" / f"strato-{a.strato}{coda}"
+        cartella = QUI / "registrazioni" / f"strato-{a.strato}"
         if a.banco:
-            banco([esegui(a.guasto, a.runner, cartella, variante=a.variante) for _ in range(a.banco)])
+            banco([esegui(a.guasto, cartella) for _ in range(a.banco)])
         else:
-            mostra(esegui(a.guasto, a.runner, cartella, variante=a.variante))
+            mostra(esegui(a.guasto, cartella))
