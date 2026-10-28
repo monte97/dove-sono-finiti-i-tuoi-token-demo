@@ -51,6 +51,8 @@ STRATO = 0
 
 EMAIL = re.compile(r"[\w.]+@[\w.]+\.\w+")
 MASCHERA = False
+PRODUZIONE = False  # il riassunto della richiesta sulla radice, per il cruscotto
+OTLP = None  # dove esportare gli span, oltre alla memoria
 
 
 class MascheraEmail(SpanProcessor):  # s5
@@ -94,6 +96,13 @@ def fai_provider(maschera: bool) -> TracerProvider:
     if maschera:  # s5
         processore = MascheraEmail(processore)  # s5
     provider.add_span_processor(processore)  # s1
+    if PRODUZIONE:
+        from segnali import RiassuntoSullaRadice  # qui: segnali importa strati
+        provider.add_span_processor(RiassuntoSullaRadice(STRATO))
+    if OTLP:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=OTLP)))
     _vero = provider.get_tracer("osservare-a-strati")
     return provider
 
@@ -715,6 +724,8 @@ if __name__ == "__main__":
     p.add_argument("--correzione", action="store_true", help="lo strumento dice quanto e' vecchio il dato")
     p.add_argument("--correzione-completa", action="store_true", help="...e valida sa cosa farne")
     p.add_argument("--maschera", action="store_true", help="solo con --strato 5: l'email non esce dagli span")
+    p.add_argument("--produzione", action="store_true", help="dallo strato 2: il riassunto della richiesta sulla radice")
+    p.add_argument("--otlp", metavar="URL", help="esporta gli span via OTLP HTTP (implica --produzione)")
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
@@ -735,10 +746,13 @@ if __name__ == "__main__":
     else:
         if a.maschera and a.strato != 5:
             raise SystemExit("--maschera serve allo strato 5, dove il contenuto entra negli span")
+        PRODUZIONE, OTLP = a.produzione or bool(a.otlp), a.otlp
+        if PRODUZIONE and a.strato < 2:
+            raise SystemExit("--produzione serve dallo strato 2, dove c'e' la radice della richiesta")
         STRATO, DOMINIO, MASCHERA = a.strato, DOMINI[a.dominio], a.maschera
         CORREZIONE = 2 if a.correzione_completa else 1 if a.correzione else 0
         a.guasto = a.guasto or CORREZIONE > 0  # la correzione ha senso solo con il guasto
-        coda = ["", "-correzione", "-correzione-completa"][CORREZIONE] + ("-maschera" if MASCHERA else "")
+        coda = ["", "-correzione", "-correzione-completa"][CORREZIONE] + ("-maschera" if MASCHERA else "") + ("-produzione" if PRODUZIONE else "")
         cartella = QUI / "registrazioni" / f"strato-{a.strato}{DOMINIO['cartella']}{coda}"
         if a.banco:
             banco([esegui(a.guasto, cartella) for _ in range(a.banco)])

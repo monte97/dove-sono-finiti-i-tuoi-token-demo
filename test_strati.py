@@ -8,7 +8,10 @@ from pathlib import Path
 
 import httpx2 as httpx
 
+import segnali as sg
 import strati as s
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
 
 s.TIMEOUT_S = 0.01
 CARTELLA = Path(tempfile.mkdtemp())
@@ -297,6 +300,34 @@ def test_replay_riepilogo_righe():
     assert dal_vivo.split("\n", 1)[1] in testo  # dal vivo e registrata si stampano uguali, intestazione a parte
     assert "speso in tutto" in testo and "strato 5" in testo
 
+
+
+def test_riassunto_sulla_radice():
+    s.PRODUZIONE = True
+    try:
+        reg, _ = corri(5)
+    finally:
+        s.PRODUZIONE = False
+    radice = next(x for x in reg["span"] if x["padre"] is None)
+    atteso = sg.riassunto({**reg, "span": [x for x in reg["span"] if x is not radice]})
+    assert atteso["richiesta.forma"] and atteso["richiesta.costo_microusd"] > 0
+    assert {k: v for k, v in radice["attributi"].items() if k.startswith("richiesta.")} == atteso
+
+
+def test_riassunto_due_trace_insieme():
+    p = sg.RiassuntoSullaRadice(5)
+    tp = TracerProvider()
+    tp.add_span_processor(p)
+    t = tp.get_tracer("prova")
+    a, b = t.start_span("invoke_workflow a"), t.start_span("invoke_workflow b")
+    with trace.use_span(a):
+        t.start_span("anthropic.messages.create", attributes={"gen_ai.usage.input_tokens": 1000,
+                                                             "gen_ai.usage.output_tokens": 50}).end()
+    assert a.attributes["richiesta.costo_microusd"] == round(s.costo(1000, 0, 50) * 1e6)
+    assert "richiesta.costo_microusd" not in b.attributes
+    a.end()
+    b.end()
+    assert all(not v for v in vars(p).values() if isinstance(v, dict))  # nessuno stato resta dopo le radici
 
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
