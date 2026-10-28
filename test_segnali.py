@@ -1,5 +1,9 @@
 """Controlli dei segnali per la produzione, su run finte e sulle registrazioni. Uso: python test_segnali.py"""
+import contextlib
+import io
+import json
 import statistics
+from pathlib import Path
 
 import segnali as sg
 import strati as s
@@ -86,6 +90,34 @@ def test_p95_e_valida_mai_chiamata():
 
 def test_strato_misto_rende_none():
     assert sg.cruscotto([RUN, {**RUN, "strato": 3}])["copia"] is None
+
+
+REG = Path(__file__).parent / "registrazioni"
+
+
+def leggi(nome, modo="guasto"):
+    return [r for f in sorted((REG / nome).glob("*.json")) if (r := json.loads(f.read_text()))["modo"] == modo]
+
+
+def test_coerenti_con_misura_sul_freeze():
+    regs = leggi("strato-5-freeze")
+    c = sg.cruscotto(regs)
+    assert c["approva"][0] == sum(s.misura(r)["valida_approva"] for r in regs)
+    assert c["ritenta"].get("cerca", 0) == sum(s.misura(r)["cerca_di_nuovo"] > 0 for r in regs)
+
+
+def test_costo_dagli_span_uguale_alla_fattura():
+    for nome in ("strato-1", "strato-5", "strato-5-freeze"):
+        for r in leggi(nome):
+            f = r["fattura"]
+            assert abs(sg.segnali(r)["costo"] - s.costo(f["in"], f["cache"], f["out"])) < 1e-9, nome
+
+
+def test_stampa_dice_cosa_manca():
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        sg.stampa("strato-1 · guasto", sg.cruscotto(leggi("strato-1")))
+    testo = fuori.getvalue()
+    assert "95° percentile" in testo and "serve lo strato 4" in testo and "serve lo strato 3" in testo
 
 
 if __name__ == "__main__":

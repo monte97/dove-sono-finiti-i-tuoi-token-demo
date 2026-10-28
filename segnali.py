@@ -43,3 +43,34 @@ def cruscotto(regs: list[dict]) -> dict:
         "copia": sum(g["copia"] for g in gg) if tutti("copia") else None,
         "costo": {"mediana": statistics.median(costi), "p95": p95(costi)} if tutti("costo") else None,
     }
+
+
+def stampa(titolo: str, c: dict):
+    manca = lambda segnale: f"— serve lo strato {MINIMO[segnale]}"
+    print(f"{titolo} · {c['n']} richieste")
+    r = c["ritenta"]
+    print(f"  {'ritentano':<18} " + (manca("ritenta") if r is None else " · ".join(
+        f"{nome} {n}" for nome, n in sorted(r.items(), key=lambda kv: -kv[1])) or "nessuno"))
+    f = c["forme"]
+    print(f"  {"forme dell'albero":<18} " + (manca("forma") if f is None else
+                                               f"{len(f)} (la più frequente in {f.most_common(1)[0][1]} run)"))
+    a = c["approva"]
+    print(f"  {'valida approva':<18} " + (manca("approva") if a is None else f"{a[0]} su {a[1]} verdetti"))
+    print(f"  {'da copia vecchia':<18} " + (manca("copia") if c["copia"] is None else f"{c['copia']} run"))
+    k = c["costo"]
+    print(f"  {'costo a richiesta':<18} " + (manca("costo") if k is None else
+                                               f"mediana $ {k['mediana']:.6f} · 95° percentile $ {k['p95']:.6f}"))
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    from pathlib import Path
+
+    cartelle = [Path(a) for a in sys.argv[1:]] or sorted(p for p in (s.QUI / "registrazioni").iterdir() if p.is_dir())
+    for cartella in cartelle:
+        regs = [json.loads(f.read_text()) for f in sorted(cartella.glob("*.json"))]
+        for modo in ("guasto", "sana"):
+            if mm := [r for r in regs if r["modo"] == modo]:
+                stampa(f"{cartella.name} · {modo}", cruscotto(mm))
+                print()

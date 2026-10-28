@@ -33,6 +33,7 @@ echo "ANTHROPIC_API_KEY=..." > .env
 .venv/bin/python strati.py --replay registrazioni/strato-4/<file>.json
 .venv/bin/python strati.py --riepilogo                      # una riga per strato e modo
 .venv/bin/python strati.py --misure 5                       # riprove, verifiche, cosa arriva a valida, grafi diversi
+.venv/bin/python segnali.py registrazioni/strato-5-freeze  # i cinque segnali per la produzione, dagli span
 .venv/bin/python strati.py --righe                          # righe di codice per strato
 .venv/bin/python strati.py --codice 4                       # le righe dello strato 4, pulite per le slide
 .venv/bin/python strati.py --strato 5 --dominio freeze --guasto     # stesso codice, altra domanda: il freeze di un deploy
@@ -40,6 +41,7 @@ echo "ANTHROPIC_API_KEY=..." > .env
 .venv/bin/python strati.py --strato 5 --correzione-completa # ...e valida sa cosa farne
 .venv/bin/python strati.py --strato 5 --guasto --maschera   # uno SpanProcessor toglie l'email dagli span
 .venv/bin/python test_strati.py                             # controlli senza rete
+.venv/bin/python test_segnali.py                            # i segnali, sulle registrazioni e su run finte
 ```
 
 Il replay stampa la registrazione come la run dal vivo, e ogni registrazione contiene solo gli
