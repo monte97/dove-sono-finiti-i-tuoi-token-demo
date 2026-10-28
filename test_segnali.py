@@ -137,6 +137,22 @@ def test_stampa_dice_cosa_manca():
     assert "richiamati" in fuori.getvalue() and "leggi_calendario in 22 run" in fuori.getvalue()
 
 
+
+def test_in_otlp():
+    import tempo
+    reg = leggi("strato-5-freeze")[0]
+    spans = tempo.in_otlp(reg, "strato-5-freeze", adesso=2_000_000_000.0)
+    assert len(spans) == len(reg["span"]) and len({x.context.trace_id for x in spans}) == 1
+    radice = next(x for x in spans if x.parent is None)
+    assert radice.attributes["banco.cartella"] == "strato-5-freeze" and radice.attributes["banco.modo"] == "guasto"
+    assert radice.attributes["richiesta.forma"] == sg.riassunto(reg)["richiesta.forma"]
+    assert max(x.end_time for x in spans) == 2_000_000_000 * 10**9
+    ids = {x.context.span_id for x in spans}
+    assert all(x.parent.span_id in ids for x in spans if x.parent)
+    assert sum(x.status.status_code.name == "ERROR" for x in spans) == sum(x["errore"] for x in reg["span"])
+    vecchia = tempo.in_otlp(leggi("strato-1")[0], "strato-1", adesso=2_000_000_000.0)
+    assert "richiesta.forma" not in next(x for x in vecchia if x.parent is None).attributes
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):
