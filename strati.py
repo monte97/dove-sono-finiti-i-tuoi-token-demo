@@ -83,6 +83,7 @@ DOMINI = {
                  "Rust per chi scrive Go": {"giorno": "domani", "ora": "16:30", "sala": "C"}},
         "ieri": {"Kubernetes da zero": {"giorno": "oggi", "ora": "15:00", "sala": "B"}},
         "servizio": "il servizio del programma",
+        "correzione": " Se il dato del programma non è aggiornato, dillo nella risposta.",
         "strumento": "leggi_programma", "campo": "sessione", "descrizione_campo": "titolo della sessione",
         "descrizione": "Legge dal servizio del programma giorno, ora e sala di una sessione dell'evento.",
         "descrizione_cerca": ("Agente che trova informazioni sul programma dell'evento (sessioni, giorni, orari, "
@@ -111,6 +112,7 @@ DOMINI = {
                  "catalogo": {"freeze": False}, "ricerca": {"freeze": False}},
         "ieri": {"pagamenti": {"freeze": False}},
         "servizio": "il servizio del calendario",
+        "correzione": " Se il dato del calendario non è aggiornato, dillo nella risposta.",
         "strumento": "leggi_calendario", "campo": "servizio", "descrizione_campo": "nome del servizio",
         "descrizione": "Legge dal calendario dei freeze se un servizio si può rilasciare in questo momento.",
         "descrizione_cerca": ("Agente che trova informazioni sul calendario dei freeze dei servizi leggendo il "
@@ -133,6 +135,12 @@ DOMINI = {
     },
 }
 DOMINIO = DOMINI["orario"]
+
+# La correzione: 1 lo strumento dice quanto e' vecchio il dato e cerca lo deve dire; 2 anche valida sa cosa farne.
+# In B valida risponde a coordina, non all'utente: per questo non le si chiede di rispondere all'utente.
+CORREZIONE = 0
+CORREZIONE_VALIDA = (" Se la risposta o il contesto dicono che il dato non è aggiornato, non scrivere «Verificato.»: "
+                     "scrivi che il dato va confermato.")
 
 _VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
              "properties": {"domanda": {"type": "string", "description": "la domanda dell'utente"},
@@ -158,8 +166,9 @@ def schemi() -> dict:
 
 def agenti_strumento() -> dict:
     """strumento -> (agente invocato, sue istruzioni, suoi strumenti)"""
-    return {"valida": ("valida", DOMINIO["valida"], []),
-            "cerca": ("cerca", DOMINIO["cerca"], [DOMINIO["strumento"]])}
+    return {"valida": ("valida", DOMINIO["valida"] + (CORREZIONE_VALIDA if CORREZIONE >= 2 else ""), []),
+            "cerca": ("cerca", DOMINIO["cerca"] + (DOMINIO["correzione"] if CORREZIONE >= 1 else ""),
+                      [DOMINIO["strumento"]])}
 
 
 PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del ragionamento torna solo se lo chiedi
@@ -182,7 +191,9 @@ def leggi_dato(chiave: str, stato: dict) -> dict:
         with tracer(4).start_as_current_span("cache.read") as span:  # s4
             span.set_attributes({"cache.hit": True, "cache.age_hours": ETA_COPIA_ORE,  # s4
                                  "cache.reason": "interruttore aperto dopo un timeout del servizio"})  # s4
-            return {**oggi, **DOMINIO["ieri"]}[trovata]  # l'eta' non arriva al modello
+            dato = {**oggi, **DOMINIO["ieri"]}[trovata]
+            # senza correzione l'eta' resta sullo span: il modello non la vede
+            return {**dato, "aggiornato": f"{ETA_COPIA_ORE} ore fa"} if CORREZIONE else dato
     try:
         return servizio(trovata, stato["guasto"])
     except TimeoutError:
@@ -296,7 +307,7 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
-    reg = {"strato": STRATO, "dominio": nome_dominio(), "registrata": ora.isoformat(timespec="seconds"),
+    reg = {"strato": STRATO, "dominio": nome_dominio(), "correzione": CORREZIONE, "registrata": ora.isoformat(timespec="seconds"),
            "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMINIO["domanda"], "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
@@ -514,6 +525,7 @@ APPROVA = re.compile(r"verificat[oa]\b(?<!non verificato)", re.I)
 NON_CONFERMA = re.compile(r"non (posso|riesco|sono in grado|è possibile|ho potuto)|non confermat|da confermare|"
                           r"conferm\w* (presso|con|all)|ti consiglio di (verificare|controllare)|non disponibile", re.I)
 DICE_TIMEOUT = re.compile(r"timeout|non ha risposto|errore|riprov|non (era )?disponibile|problema", re.I)
+AVVISO = re.compile(r"ieri|vecchi|26 ore|non è aggiornat|non (riesco|posso) (a )?conferm|ricontroll|va confermat", re.I)
 DICE_ETA = re.compile(r"26 ore|\bieri\b|copia|cache|\betà\b", re.I)
 
 
@@ -566,6 +578,9 @@ def misura(r: dict) -> dict:
             "valida_approva": sum(bool(APPROVA.search(v)) and not re.search(r"non (verificat|approvat|superat)|verifica non", v, re.I)
                                   for v in verdetti),
             "email_a_valida": sum(bool(EMAIL.search(x)) for x in a_valida),
+            "avvisa": bool(AVVISO.search(risposta)),
+            # l'eta' negli argomenti dell'arco verso valida (dallo strato 3): il messaggio di valida e' fatto di questi
+            "valida_sa_eta": sum(bool(DICE_ETA.search(json.dumps(a, ensure_ascii=False))) for a in trasferimenti),
             "cerca_di_nuovo": max(0, sum(attr(s, "gen_ai.transfer.target.name") == "cerca" for s in archi) - 1),
             "a_valida": a_valida, "argomenti": trasferimenti}
 
@@ -586,10 +601,11 @@ def misure(cartelle: list[Path]):
                   f"(riprove dopo il timeout in tutto {sum(m["riprove"] for m in mm)}) · "
                   + " · ".join(f"{e} {conta(lambda m, e=e: m['esito'] == e)}" for e in ("sbagliata", "giusta", "non conferma", "altro"))
                   + f" · dice di non poter confermare {conta(lambda m: m['non_conferma'])} · "
-                  f"approvazione {conta(lambda m: m['verificato'])}")
+                  f"approvazione {conta(lambda m: m['verificato'])} · avvisa {conta(lambda m: m['avvisa'])}")
             print(f"  valida chiamata: in {conta(lambda m: m['valida'] > 0)} run, {sum(m['valida'] for m in mm)} volte · "
                   f"con contesto {sum(m['contesto'] for m in mm)} · le arriva il dato dello strumento {sum(m['valida_vede_dato'] for m in mm)} · "
-                  f"il timeout {sum(m['valida_vede_timeout'] for m in mm)} · l'età {sum(m['valida_vede_eta'] for m in mm)} · "
+                  f"il timeout {sum(m['valida_vede_timeout'] for m in mm)} · l'età {sum(m['valida_vede_eta'] for m in mm)} "
+                  f"(anche negli argomenti {sum(m['valida_sa_eta'] for m in mm)}) · "
                   f"l'email {sum(m['email_a_valida'] for m in mm)} · valida approva {sum(m['valida_approva'] for m in mm)} · "
                   f"cerca richiamata {sum(m['cerca_di_nuovo'] for m in mm)}")
             print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello {med('chiamate'):.0f} · "
@@ -616,6 +632,8 @@ if __name__ == "__main__":
     p.add_argument("--strato", type=int, choices=range(6), default=0)
     p.add_argument("--guasto", action="store_true")
     p.add_argument("--dominio", choices=list(DOMINI), default="orario")
+    p.add_argument("--correzione", action="store_true", help="lo strumento dice quanto e' vecchio il dato")
+    p.add_argument("--correzione-completa", action="store_true", help="...e valida sa cosa farne")
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
@@ -632,7 +650,10 @@ if __name__ == "__main__":
         mostra(json.loads(Path(a.replay).read_text()), registrata=True)
     else:
         STRATO, DOMINIO = a.strato, DOMINI[a.dominio]
-        cartella = QUI / "registrazioni" / f"strato-{a.strato}{DOMINIO['cartella']}"
+        CORREZIONE = 2 if a.correzione_completa else 1 if a.correzione else 0
+        a.guasto = a.guasto or CORREZIONE > 0  # la correzione ha senso solo con il guasto
+        coda = ["", "-correzione", "-correzione-completa"][CORREZIONE]
+        cartella = QUI / "registrazioni" / f"strato-{a.strato}{DOMINIO['cartella']}{coda}"
         if a.banco:
             banco([esegui(a.guasto, cartella) for _ in range(a.banco)])
         else:

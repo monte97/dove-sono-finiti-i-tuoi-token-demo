@@ -14,6 +14,7 @@ s.TIMEOUT_S = 0.01
 CARTELLA = Path(tempfile.mkdtemp())
 INTESTAZIONI = {"request-id": "req_finto", "anthropic-organization-id": "org-finta", "anthropic-workspace-id": "wrk-finto"}
 VISTE = []  # le intestazioni che il client manda al provider
+CORPI = []  # i corpi delle richieste: istruzioni, messaggi, strumenti
 
 
 def risposta_finta(richiesta):
@@ -22,6 +23,7 @@ def risposta_finta(richiesta):
     cerca, poi valida, poi risponde. Senza strumenti risponde come valida."""
     VISTE.append(dict(richiesta.headers))
     corpo = json.loads(richiesta.content)
+    CORPI.append(corpo)
     messaggi = corpo["messages"]
     ultimo = messaggi[-1]["content"]
     strumenti = {x["name"] for x in corpo.get("tools", [])}
@@ -204,6 +206,27 @@ def test_freeze_grafo():
     cache = [x for x in reg["span"] if x["nome"] == "cache.read"]
     assert cache[0]["attributi"]["cache.age_hours"] == 26
     assert s.DOMINIO is s.DOMINI["orario"]
+
+
+def istruzioni_di(agente_istruzioni_finiscono):
+    return any(isinstance(c.get("system"), str) and c["system"].endswith(agente_istruzioni_finiscono)
+               for c in CORPI[-CHIAMATE:])
+
+
+def test_correzione_l_eta_arriva_a_cerca():
+    try:
+        s.CORREZIONE = 1
+        reg, _ = corri(5)
+        strumenti = [x for x in reg["span"] if x["nome"] == "execute_tool leggi_programma"]
+        assert '"aggiornato": "26 ore fa"' in strumenti[1]["attributi"]["gen_ai.tool.call.result"]
+        m = s.misura(reg)
+        assert "avvisa" in m and "valida_sa_eta" in m and reg["correzione"] == 1
+        assert istruzioni_di("dillo nella risposta.") and not istruzioni_di("va confermato.")
+        s.CORREZIONE = 2
+        reg, _ = corri(5)
+        assert istruzioni_di("va confermato.") and reg["correzione"] == 2
+    finally:
+        s.CORREZIONE = 0
 
 
 def test_replay_registrazione_dello_spike():
