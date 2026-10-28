@@ -1,0 +1,605 @@
+{
+ "uid": "segnali",
+ "title": "Lunedì, in produzione",
+ "schemaVersion": 39,
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "refresh": "",
+ "panels": [
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "Richieste",
+   "description": "Le radici invoke_workflow della cartella e del modo scelti.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "richieste",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Richiamano leggi_programma",
+   "description": "Richieste in cui lo strumento è chiamato almeno due volte, errore o no: dal riassunto sulla radice.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 0,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "richiamati_leggi_programma",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" && span.richiesta.richiamati =~ \".*\\\\bleggi_programma\\\\b.*\" } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Richiamano leggi_calendario",
+   "description": "Richieste in cui lo strumento è chiamato almeno due volte, errore o no: dal riassunto sulla radice.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 0,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "richiamati_leggi_calendario",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" && span.richiesta.richiamati =~ \".*\\\\bleggi_calendario\\\\b.*\" } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Richiamano cerca",
+   "description": "Richieste in cui lo strumento è chiamato almeno due volte, errore o no: dal riassunto sulla radice.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "richiamati_cerca",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" && span.richiesta.richiamati =~ \".*\\\\bcerca\\\\b.*\" } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 7,
+   "type": "stat",
+   "title": "Richiamano valida",
+   "description": "Richieste in cui lo strumento è chiamato almeno due volte, errore o no: dal riassunto sulla radice.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 0,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "richiamati_valida",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" && span.richiesta.richiamati =~ \".*\\\\bvalida\\\\b.*\" } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 8,
+   "type": "stat",
+   "title": "Da copia vecchia",
+   "description": "Richieste che hanno letto la copia di ieri (span cache.read).",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 20,
+    "y": 0,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "copia",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" && span.richiesta.copia_vecchia = true } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 9,
+   "type": "stat",
+   "title": "valida approva",
+   "description": "Archi verso valida il cui risultato chiude con «Verificato.», su tutti i verdetti: dagli span, non dal riassunto.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 5,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "approvati",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" } >> { span.gen_ai.transfer.target.name = \"valida\" && span.gen_ai.tool.call.result =~ \"(?s).*Verificato\\\\.[\\\\s\\\"'»*]*\" } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 10,
+   "type": "stat",
+   "title": "Verdetti di valida",
+   "description": "Tutti gli archi verso valida con un risultato.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 5,
+    "w": 4,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "verdetti",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" } >> { span.gen_ai.transfer.target.name = \"valida\" && span.gen_ai.tool.call.result != nil } | count_over_time()",
+     "step": "60s"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "sum"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "Costo a richiesta (µ$)",
+   "description": "Dai token per listino, sul riassunto della radice. Il 95° percentile lo calcola Grafana sui valori: quantile_over_time di Tempo approssima per fasce a potenze di due.",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 5,
+    "w": 16,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "costo",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "tableType": "spans",
+     "limit": 500,
+     "spss": 1,
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" } | select(span.richiesta.costo_microusd)"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "names": [
+        "richiesta.costo_microusd"
+       ]
+      }
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "richiesta.costo_microusd",
+        "destinationType": "number"
+       }
+      ],
+      "fields": {}
+     }
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "median",
+      "p95"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value_and_name",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "displayName": "${__calc}"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 5,
+   "type": "table",
+   "title": "Forme dell'albero (richieste)",
+   "datasource": {
+    "type": "tempo",
+    "uid": "tempo"
+   },
+   "description": "Ogni forma è la sequenza di agenti e strumenti che il modello ha scelto; ! se in errore.",
+   "gridPos": {
+    "x": 0,
+    "y": 10,
+    "w": 24,
+    "h": 6
+   },
+   "targets": [
+    {
+     "refId": "forme",
+     "datasource": {
+      "type": "tempo",
+      "uid": "tempo"
+     },
+     "queryType": "traceql",
+     "metricsQueryType": "range",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" } | count_over_time() by (span.richiesta.forma)",
+     "step": "60s"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "reduce",
+     "options": {
+      "reducers": [
+       "sum"
+      ],
+      "mode": "seriesToRows"
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "renameByName": {
+       "Field": "forma",
+       "Total": "richieste"
+      }
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "richieste",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   },
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  }
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "cartella",
+    "type": "custom",
+    "query": "strato-5,strato-5-freeze,strato-5-correzione,strato-5-correzione-completa",
+    "current": {
+     "text": "strato-5-freeze",
+     "value": "strato-5-freeze"
+    },
+    "options": [
+     {
+      "text": "strato-5",
+      "value": "strato-5",
+      "selected": false
+     },
+     {
+      "text": "strato-5-freeze",
+      "value": "strato-5-freeze",
+      "selected": true
+     },
+     {
+      "text": "strato-5-correzione",
+      "value": "strato-5-correzione",
+      "selected": false
+     },
+     {
+      "text": "strato-5-correzione-completa",
+      "value": "strato-5-correzione-completa",
+      "selected": false
+     }
+    ]
+   },
+   {
+    "name": "modo",
+    "type": "custom",
+    "query": "guasto,sana",
+    "current": {
+     "text": "guasto",
+     "value": "guasto"
+    },
+    "options": [
+     {
+      "text": "guasto",
+      "value": "guasto",
+      "selected": true
+     },
+     {
+      "text": "sana",
+      "value": "sana",
+      "selected": false
+     }
+    ]
+   }
+  ]
+ }
+}

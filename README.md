@@ -47,6 +47,27 @@ echo "ANTHROPIC_API_KEY=..." > .env
 Il replay stampa la registrazione come la run dal vivo, e ogni registrazione contiene solo gli
 span che il suo strato ha catturato.
 
+## Cruscotto
+
+I cinque segnali di «Lunedì, in produzione» su Grafana, letti da Tempo con TraceQL. Porte fuori da
+3000/3200: Grafana su 3377, Tempo su 3210, OTLP HTTP su 4418.
+
+```bash
+docker compose -f cruscotto/compose.yaml up -d
+.venv/bin/python tempo.py registrazioni/strato-5 registrazioni/strato-5-freeze   # le registrazioni, come appena finite
+.venv/bin/python verifica_cruscotto.py registrazioni/strato-5-freeze             # le query del cruscotto contro segnali.py
+open "http://localhost:3377/d/segnali?var-cartella=strato-5-freeze&var-modo=guasto"
+.venv/bin/python strati.py --strato 5 --guasto --otlp http://localhost:4418/v1/traces   # dal vivo
+```
+
+Le metriche TraceQL contano span, non richieste: per questo `--produzione` (implicita in `--otlp`) aggiunge
+un `SpanProcessor` che scrive sulla radice `invoke_workflow` il riassunto della richiesta (`richiesta.forma`,
+`richiesta.costo_microusd`, `richiesta.richiamati`, `richiesta.copia_vecchia`), calcolato con le funzioni di
+`segnali.py`. Il costo è in microdollari interi e il 95° percentile lo calcola Grafana sui valori della
+ricerca: `quantile_over_time` di Tempo scarta i valori sotto 1 e approssima per fasce a potenze di due.
+`banco.cartella` e `banco.modo` esistono solo per filtrare le run della demo. `verifica_cruscotto.py` controlla
+le query su Tempo, non i calcoli che Grafana fa nel browser (riduzioni e conversioni): quelli si guardano.
+
 ## Registrazioni
 
 Le cartelle si chiamano `strato-N`, più il dominio (`-freeze`), la correzione (`-correzione`,
