@@ -243,6 +243,16 @@ def test_maschera_email():
     assert s.con_email(reg["span"]) > 0  # senza maschera l'email resta
 
 
+def test_codice_pulito():
+    t = s.codice(4)
+    assert 'start_as_current_span("cache.read")' in t and "cache.age_hours" in t
+    assert "tracer(4)" not in t and "# s4" not in t and "STRATO" not in t
+    assert "open_telemetry=" in s.codice(1)
+    t = s.codice(3)
+    assert 'span.set_attribute("gen_ai.tool.call.arguments"' in t and "if STRATO" not in t
+    assert "\nspan.set_attribute(\"gen_ai.tool.call.arguments\"" in t  # il corpo dell'if perde il rientro
+
+
 def test_replay_registrazione_dello_spike():
     reg, _ = corri(3)
     vecchia = {**json.loads(json.dumps(reg)), "variante": "A"}  # come le registrazioni nel tag spike-a-b

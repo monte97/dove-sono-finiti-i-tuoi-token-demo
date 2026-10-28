@@ -30,6 +30,7 @@ import datetime as dt
 import json
 import re
 import statistics
+import textwrap
 import time
 from pathlib import Path
 
@@ -53,7 +54,7 @@ MASCHERA = False
 
 
 class MascheraEmail(SpanProcessor):  # s5
-    """Toglie l'email da ogni attributo prima che lo span esca dal processo, anche dentro i JSON."""
+    """Toglie l'email da ogni attributo prima che lo span esca dal processo, anche dentro i JSON."""  # s5
 
     def __init__(self, prossimo: SpanProcessor):  # s5
         self.prossimo = prossimo  # s5
@@ -670,6 +671,30 @@ def righe():
         print(f"strato {n} · {TITOLI[n]:<28} {len(marcate):>3} righe")
 
 
+def codice(n: int) -> str:
+    """Le righe dello strato n come si scriverebbero senza l'impalcatura della demo, per le slide."""
+    testo = Path(__file__).read_text().splitlines()
+    marcate = [i for i, r in enumerate(testo) if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith("#")]
+    blocchi, fuori = [], []
+    for i in marcate:
+        if blocchi and not "".join(testo[blocchi[-1][-1] + 1:i]).strip():  # in mezzo solo righe vuote
+            blocchi[-1].extend(range(blocchi[-1][-1] + 1, i + 1))
+        else:
+            blocchi.append([i])
+    for blocco in blocchi:
+        righe_, rientro_if = [], None
+        for i in blocco:
+            r = re.sub(rf"\s+#\s*s{n}\b.*$", "", testo[i]).replace(f"tracer({n}).", "tracer.")
+            if re.match(rf"\s*if STRATO >= {n}:", r):
+                rientro_if = len(r) - len(r.lstrip())
+                continue
+            if rientro_if is not None and len(r) - len(r.lstrip()) > rientro_if:
+                r = r[4:]
+            righe_.append(r)
+        fuori.append(textwrap.dedent("\n".join(righe_)))
+    return "\n...\n".join(fuori)
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--strato", type=int, choices=range(6), default=0)
@@ -683,9 +708,12 @@ if __name__ == "__main__":
     p.add_argument("--riepilogo", action="store_true")
     p.add_argument("--misure", type=int, metavar="STRATO", help="grafo, riprove, verifiche e risposte di uno strato")
     p.add_argument("--righe", action="store_true")
+    p.add_argument("--codice", type=int, choices=range(6), metavar="STRATO", help="le righe di uno strato, pulite per le slide")
     a = p.parse_args()
     if a.righe:
         righe()
+    elif a.codice is not None:
+        print(codice(a.codice))
     elif a.misure is not None:
         misure(sorted(QUI.glob(f"registrazioni/strato-{a.misure}*")))
     elif a.riepilogo:

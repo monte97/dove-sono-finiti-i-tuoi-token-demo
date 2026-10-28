@@ -34,6 +34,11 @@ echo "ANTHROPIC_API_KEY=..." > .env
 .venv/bin/python strati.py --riepilogo                      # una riga per strato e modo
 .venv/bin/python strati.py --misure 5                       # riprove, verifiche, cosa arriva a valida, grafi diversi
 .venv/bin/python strati.py --righe                          # righe di codice per strato
+.venv/bin/python strati.py --codice 4                       # le righe dello strato 4, pulite per le slide
+.venv/bin/python strati.py --strato 5 --dominio freeze --guasto     # stesso codice, altra domanda: il freeze di un deploy
+.venv/bin/python strati.py --strato 5 --correzione          # lo strumento dice quanto è vecchio il dato
+.venv/bin/python strati.py --strato 5 --correzione-completa # ...e valida sa cosa farne
+.venv/bin/python strati.py --strato 5 --guasto --maschera   # uno SpanProcessor toglie l'email dagli span
 .venv/bin/python test_strati.py                             # controlli senza rete
 ```
 
@@ -41,6 +46,9 @@ Il replay stampa la registrazione come la run dal vivo, e ogni registrazione con
 span che il suo strato ha catturato.
 
 ## Registrazioni
+
+Le cartelle si chiamano `strato-N`, più il dominio (`-freeze`), la correzione (`-correzione`,
+`-correzione-completa`) e la maschera (`-maschera`). `--riepilogo` dà una riga per cartella e modo.
 
 `registrazioni/strato-N/` sono versionate. Prima di salvare (e di stampare) `anthropic.organization.id`,
 `anthropic.workspace.id` e `anthropic.request.id` diventano `"oscurato"`. Le registrazioni dello
