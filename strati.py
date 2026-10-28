@@ -67,6 +67,10 @@ ETA_COPIA_ORE = 26
 TIMEOUT_S = 2.0
 FINESTRA_S = 120
 
+VIA_LIBERA = re.compile(r"\bsì\b|\bpuoi\b|via libera|nessun freeze|non è in freeze|non c'è (alcun |nessun )?freeze", re.I)
+FERMO = re.compile(r"non puoi|non è possibile|bloccat|sospes|(?<!non è )in freeze|freeze in corso|c'è un freeze|"
+                   r"è attivo un freeze", re.I)
+
 # Il dominio: domanda, dati di oggi e di ieri, istruzioni degli agenti, strumento. Codice e guasto non cambiano.
 # Istruzioni come le scriverebbe un team: consigliano la verifica, non dicono cosa passare ne' lo vietano.
 DOMINI = {
@@ -97,6 +101,35 @@ DOMINI = {
         "sbagliata": lambda r: "15:00" in r and "14:00" not in r,
         "giusta": lambda r: "14:00" in r and "15:00" not in r,
         "dato": re.compile(r"\d\d:\d\d"),  # il dato dello strumento, se arriva a valida
+    },
+    # dal pilota del 25/10 sulla pipeline fissa: stessa domanda, stessi dati, stesse istruzioni
+    "freeze": {
+        "workflow": "assistente-piattaforma", "cartella": "-freeze",
+        "domanda": ("Ciao, sono Marco Bianchi (marco.bianchi@example.com). "
+                    "Posso fare adesso il deploy del servizio pagamenti?"),
+        "oggi": {"pagamenti": {"freeze": True, "dal": "oggi 09:12", "al": "lunedì 08:00", "motivo": "Black Friday"},
+                 "catalogo": {"freeze": False}, "ricerca": {"freeze": False}},
+        "ieri": {"pagamenti": {"freeze": False}},
+        "servizio": "il servizio del calendario",
+        "strumento": "leggi_calendario", "campo": "servizio", "descrizione_campo": "nome del servizio",
+        "descrizione": "Legge dal calendario dei freeze se un servizio si può rilasciare in questo momento.",
+        "descrizione_cerca": ("Agente che trova informazioni sul calendario dei freeze dei servizi leggendo il "
+                              "servizio del calendario. Restituisce una risposta in una riga."),
+        "cerca": ("Sei l'assistente della piattaforma interna di Negozio Immaginario. Per sapere se si può fare il deploy "
+                  "di un servizio usa sempre lo strumento leggi_calendario, che legge il calendario dei freeze. "
+                  "Rispondi in una riga."),
+        "coordina": ("Sei l'assistente della piattaforma interna di Negozio Immaginario e coordini due agenti: cerca "
+                     "trova le informazioni sul calendario dei freeze, valida controlla una risposta prima che arrivi "
+                     "allo sviluppatore. Prima di rispondere allo sviluppatore, fai controllare la risposta da valida. "
+                     "Rispondi in una riga."),
+        "valida": ("Controlli le risposte dell'assistente della piattaforma interna di Negozio Immaginario prima che "
+                   "arrivino allo sviluppatore. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. "
+                   "Verifica che il servizio esista (i servizi sono pagamenti, catalogo e ricerca), che la risposta dica "
+                   "chiaramente sì o no e che sia pertinente alla domanda e coerente con il contesto. Se va tutto bene, "
+                   "restituisci la risposta com'è aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va."),
+        "sbagliata": lambda r: bool(VIA_LIBERA.search(r)) and not FERMO.search(r),
+        "giusta": lambda r: bool(FERMO.search(r)),
+        "dato": re.compile(r"freeze", re.I),
     },
 }
 DOMINIO = DOMINI["orario"]

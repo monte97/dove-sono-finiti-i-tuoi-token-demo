@@ -25,6 +25,7 @@ def risposta_finta(richiesta):
     messaggi = corpo["messages"]
     ultimo = messaggi[-1]["content"]
     strumenti = {x["name"] for x in corpo.get("tools", [])}
+    dati = next((x for x in corpo.get("tools", []) if x["name"] not in ("cerca", "valida")), None)  # lo strumento del dominio
     pensiero = {"type": "thinking", "thinking": "Devo leggere il programma.", "signature": "x"}
     uso = {"input_tokens": 1000, "output_tokens": 50, "cache_read_input_tokens": 0}
     base = {"id": "msg_finto", "type": "message", "role": "assistant", "model": s.MODEL, "usage": uso}
@@ -48,15 +49,15 @@ def risposta_finta(richiesta):
         if precedente == "cerca":
             return chiama("valida", {"domanda": domanda, "risposta": risultato})
         return rispondi(risultato)
-    if "leggi_programma" in strumenti and not buono:
-        return chiama("leggi_programma", {"sessione": "Kubernetes da zero"})
+    if dati and not buono:
+        return chiama(dati["name"], {dati["input_schema"]["required"][0]: next(iter(s.DOMINIO["oggi"]))})
     if "chiedi_verifica" in strumenti and precedente == "leggi_programma":
         bozza = f"Oggi alle {json.loads(risultato)['ora']}, sala B."
         return chiama("chiedi_verifica", {"domanda": domanda, "risposta": bozza, "contesto": risultato})
     if precedente == "chiedi_verifica":
         return rispondi(risultato.replace("\n\nVerificato.", ""))
     if buono:
-        return rispondi(json.loads(risultato)["ora"])
+        return rispondi(str(json.loads(risultato).get("ora", risultato)))
     return rispondi("Oggi alle 15:00, sala B.\n\nVerificato.")
 
 
@@ -68,6 +69,15 @@ def corri(strato, guasto=True):
         reg = s.esegui(guasto, CARTELLA, client=client)
         s.mostra(reg)
     return reg, re.sub(r"\033\[\d+m", "", fuori.getvalue())  # senza colori
+
+
+@contextlib.contextmanager
+def dominio(nome):
+    s.DOMINIO = s.DOMINI[nome]
+    try:
+        yield
+    finally:
+        s.DOMINIO = s.DOMINI["orario"]
 
 
 def nomi(reg):
@@ -165,6 +175,35 @@ def test_dominio_orario_invariato():
     assert m["esito"] == "sbagliata"
     assert s.DOMINI["orario"]["sbagliata"]("Oggi alle 15:00, sala B.")
     assert s.DOMINI["orario"]["giusta"]("Oggi alle 14:00, sala B.")
+
+
+def test_freeze_argomento_libero():
+    with dominio("freeze"):
+        stato = {"aperto_fino": 0.0, "guasto": False, "fattura": []}
+        assert s.leggi_dato("servizio pagamenti", stato)["freeze"] is True
+
+
+def test_freeze_esito():
+    d = s.DOMINI["freeze"]
+    assert d["sbagliata"]("Sì, puoi fare il deploy di pagamenti adesso.")
+    assert d["sbagliata"]("Puoi procedere: pagamenti non è in freeze.")
+    assert d["giusta"]("No, pagamenti è in freeze fino a lunedì 08:00.")
+    assert d["giusta"]("Non puoi fare il deploy: c'è un freeze per il Black Friday.")
+    assert not d["sbagliata"]("Non puoi fare il deploy: c'è un freeze per il Black Friday.")
+    with dominio("freeze"):
+        reg, _ = corri(5)
+    m = s.misura({**reg, "risposta": "Non riesco a confermarlo, il calendario non ha risposto."})
+    assert m["esito"] == "non conferma"
+
+
+def test_freeze_grafo():
+    with dominio("freeze"):
+        reg, _ = corri(5)
+    assert reg["dominio"] == "freeze" and "cerca>leggi_calendario!" in s.misura(reg)["grafo"]
+    assert nomi(reg)[-1] == "invoke_workflow assistente-piattaforma"
+    cache = [x for x in reg["span"] if x["nome"] == "cache.read"]
+    assert cache[0]["attributi"]["cache.age_hours"] == 26
+    assert s.DOMINIO is s.DOMINI["orario"]
 
 
 def test_replay_registrazione_dello_spike():
