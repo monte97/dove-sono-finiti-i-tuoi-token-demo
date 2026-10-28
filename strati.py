@@ -88,6 +88,12 @@ memoria = InMemorySpanExporter()  # s1  ponytail: in memoria; dal vivo un export
 _spento = trace.NoOpTracer()
 
 
+def processore_otlp(url: str):
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    return BatchSpanProcessor(OTLPSpanExporter(endpoint=url))
+
+
 def fai_provider(maschera: bool) -> TracerProvider:
     """Un provider per client: con la maschera, gli span passano da MascheraEmail prima dell'exporter."""
     global _vero
@@ -99,10 +105,8 @@ def fai_provider(maschera: bool) -> TracerProvider:
     if PRODUZIONE:
         from segnali import RiassuntoSullaRadice  # qui: segnali importa strati
         provider.add_span_processor(RiassuntoSullaRadice(STRATO))
-    if OTLP:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=OTLP)))
+    if OTLP:  # anche verso il backend l'email esce solo mascherata
+        provider.add_span_processor(MascheraEmail(processore_otlp(OTLP)) if maschera else processore_otlp(OTLP))
     _vero = provider.get_tracer("osservare-a-strati")
     return provider
 
@@ -365,6 +369,8 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     with tracer(2).start_as_current_span(f"invoke_workflow {DOMINIO['workflow']}") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
         span.set_attribute("gen_ai.workflow.name", DOMINIO["workflow"])  # s2
+        if PRODUZIONE:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
+            span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
         # coordina decide chi chiamare, in che ordine e cosa passare
         risposta = agente(client, "coordina", DOMINIO["coordina"], DOMINIO["domanda"], stato, ["cerca", "valida"])
     secondi = time.monotonic() - inizio  # s0

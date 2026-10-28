@@ -6,6 +6,8 @@ import argparse
 import json
 import random
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from opentelemetry.sdk.resources import Resource
@@ -22,6 +24,8 @@ def in_otlp(r: dict, cartella: str, adesso: float) -> list[ReadableSpan]:
     prende il riassunto, se non lo ha gia', e i metadati del banco; sotto lo strato 2 una radice non c'e'
     e i metadati vanno su ogni trace (D22: allo strato 1 una domanda sono piu' trace scollegate)."""
     span = r["span"]
+    if not span:  # strato 0: un log e una fattura, nessuno span
+        return []
     sposta = adesso - max(x["fine"] for x in span)
     tracce = {t: random.getrandbits(128) for t in {x["trace"] for x in span}}
     ids = {x["id"]: random.getrandbits(64) for x in span}
@@ -46,16 +50,38 @@ def in_otlp(r: dict, cartella: str, adesso: float) -> list[ReadableSpan]:
     return fuori
 
 
+def gia_in_tempo(cartella: str, cerca) -> bool:
+    """Una cartella rimandata due volte nella stessa ora raddoppia ogni conteggio del cruscotto."""
+    return cerca(f'{{ span.banco.cartella = "{cartella}" }}') > 0
+
+
+def cerca_in_tempo(tempo: str):
+    def cerca(q: str) -> int:
+        fine = int(time.time())
+        parametri = urllib.parse.urlencode({"q": q, "start": fine - 3600, "end": fine, "limit": 1})
+        with urllib.request.urlopen(f"{tempo}/api/search?{parametri}", timeout=30) as r:
+            return len(json.load(r).get("traces", []))
+    return cerca
+
+
 if __name__ == "__main__":
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--otlp", default="http://localhost:4418/v1/traces")
+    p.add_argument("--tempo", default="http://localhost:3210", help="per controllare cosa c'e' gia'")
+    p.add_argument("--ancora", action="store_true", help="rimanda anche se la cartella e' gia' in Tempo nell'ultima ora")
     p.add_argument("cartelle", nargs="+", type=Path)
     a = p.parse_args()
     esporta = OTLPSpanExporter(endpoint=a.otlp)
+    cerca = cerca_in_tempo(a.tempo)
     for cartella in a.cartelle:
+        if not a.ancora and gia_in_tempo(cartella.name, cerca):
+            raise SystemExit(f"{cartella.name} e' gia' in Tempo nell'ultima ora: rimandarla raddoppia i conteggi "
+                             "(--ancora per farlo comunque, oppure docker compose down -v e di nuovo up)")
         for f in sorted(cartella.glob("*.json")):
-            esito = esporta.export(in_otlp(json.loads(f.read_text()), cartella.name, time.time()))
+            if not (spans := in_otlp(json.loads(f.read_text()), cartella.name, time.time())):
+                continue
+            esito = esporta.export(spans)
             print(cartella.name, f.name, esito.name)
             time.sleep(0.1)

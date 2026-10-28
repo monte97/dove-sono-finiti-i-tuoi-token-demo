@@ -153,6 +153,13 @@ def test_in_otlp():
     vecchia = tempo.in_otlp(leggi("strato-1")[0], "strato-1", adesso=2_000_000_000.0)
     assert "richiesta.forma" not in next(x for x in vecchia if x.parent is None).attributes
 
+
+def test_in_otlp_strato_0_e_doppio_invio():
+    import tempo
+    assert tempo.in_otlp(leggi("strato-0")[0], "strato-0", adesso=2_000_000_000.0) == []
+    assert tempo.gia_in_tempo("strato-5", cerca=lambda q: 30 if '"strato-5"' in q else 0)
+    assert not tempo.gia_in_tempo("strato-5-freeze", cerca=lambda q: 0)
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):

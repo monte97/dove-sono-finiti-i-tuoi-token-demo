@@ -551,7 +551,7 @@
    {
     "name": "cartella",
     "type": "custom",
-    "query": "strato-5,strato-5-freeze,strato-5-correzione,strato-5-correzione-completa",
+    "query": "strato-5,strato-5-freeze,strato-5-correzione,strato-5-correzione-completa,strato-5-produzione,strato-5-freeze-produzione",
     "current": {
      "text": "strato-5-freeze",
      "value": "strato-5-freeze"
@@ -575,6 +575,16 @@
      {
       "text": "strato-5-correzione-completa",
       "value": "strato-5-correzione-completa",
+      "selected": false
+     },
+     {
+      "text": "strato-5-produzione",
+      "value": "strato-5-produzione",
+      "selected": false
+     },
+     {
+      "text": "strato-5-freeze-produzione",
+      "value": "strato-5-freeze-produzione",
       "selected": false
      }
     ]

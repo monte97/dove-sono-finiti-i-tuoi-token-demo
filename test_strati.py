@@ -329,6 +329,30 @@ def test_riassunto_due_trace_insieme():
     b.end()
     assert all(not v for v in vars(p).values() if isinstance(v, dict))  # nessuno stato resta dopo le radici
 
+
+def test_otlp_mascherato():
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    fuori, vero = InMemorySpanExporter(), s.processore_otlp
+    s.processore_otlp = lambda url: SimpleSpanProcessor(fuori)  # al posto di Tempo
+    s.OTLP, s.MASCHERA = "http://finto", True
+    try:
+        corri(5)
+    finally:
+        s.processore_otlp, s.OTLP, s.MASCHERA = vero, None, False
+    span = [s.in_dict(x) for x in fuori.get_finished_spans()]
+    assert span and s.con_email(span) == 0  # l'email non esce dal processo neanche verso il backend
+
+
+def test_produzione_dal_vivo_porta_il_banco():
+    s.PRODUZIONE = True
+    try:
+        reg, _ = corri(5)
+    finally:
+        s.PRODUZIONE = False
+    radice = next(x for x in reg["span"] if x["padre"] is None)
+    assert radice["attributi"]["banco.cartella"] == CARTELLA.name and radice["attributi"]["banco.modo"] == "guasto"
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):
