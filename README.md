@@ -47,3 +47,37 @@ strato 5 contengono prompt, risposte e riassunto del ragionamento, quindi anche 
 
 Il costo è una stima, token per listino di Claude Haiku 5.5 letto il 23/10/2026. Le convenzioni
 GenAI di OpenTelemetry sono sperimentali e i nomi possono cambiare.
+
+## Varianti: il grafo fra agenti lo decide il modello (ramo `grafo-del-modello`)
+
+Nella pipeline fissa il passaggio da `cerca` a `valida` è scritto nel codice. Le varianti tengono
+dominio, guasto, modello e ciclo scritto a mano, e lasciano il grafo al modello:
+
+- `--variante A`, **agente come strumento**: `cerca` ha anche `chiedi_verifica`, che invoca `valida`.
+  Se chiamarla, quando e cosa passarle (domanda, risposta, un `contesto` facoltativo) lo decide il modello.
+- `--variante B`, **orchestratore**: `coordina` ha come strumenti gli agenti `cerca` e `valida` e
+  decide chi chiamare, in che ordine, cosa passare e quando rispondere.
+
+Strumentazione dell'arco fra agenti come nel refinement «Agent as a tool» delle convenzioni GenAI
+(`gen_ai.execute_tool.transfer.internal`, repo `open-telemetry/semantic-conventions-genai`, stato
+Development): span `execute_tool {strumento}` del chiamante, con `gen_ai.agent.name` del chiamante,
+`gen_ai.transfer.mode = return_to_caller` e `gen_ai.transfer.target.name`, e dentro lo span
+`invoke_agent` del chiamato.
+
+Cosa cambia negli strati:
+
+| strato | pipeline fissa | varianti A e B |
+|---|---|---|
+| 2 | radice e agenti, in fila | anche gli archi fra agenti (`execute_tool chiedi_verifica`, `execute_tool cerca`, `execute_tool valida`): senza, non si vede chi ha chiamato chi |
+| 3 | argomenti e risultato di `leggi_programma` | anche argomenti e risultato degli archi: sono prompt, quindi il problema della redazione arriva qui |
+| 5 | messaggi e ragionamento | in più: perché il modello ha scelto quell'arco e cosa ha deciso di passare |
+
+```bash
+.venv/bin/python strati.py --strato 5 --variante A --guasto
+.venv/bin/python strati.py --strato 5 --variante B --guasto --banco 30
+.venv/bin/python strati.py --misure 5     # riprove, verifiche, cosa arriva a valida, grafi diversi
+```
+
+Le registrazioni delle varianti stanno in `registrazioni/strato-N-A/` e `registrazioni/strato-N-B/`.
+Le istruzioni di `valida` nelle varianti dicono in più che può ricevere un contesto: non sono
+identiche a quelle della pipeline fissa.

@@ -1,8 +1,15 @@
 """La stessa risposta sbagliata, osservata uno strato alla volta.
 
 Due agenti: `cerca` legge il programma con lo strumento `leggi_programma`, `valida` controlla
-la risposta senza vedere la fonte. Il servizio del programma e' simulato e il difetto e' messo
-apposta: dopo un timeout lo strumento serve per 120 s la copia di ieri (15:00 invece di 14:00).
+la risposta. Il servizio del programma e' simulato e il difetto e' messo apposta: dopo un timeout
+lo strumento serve per 120 s la copia di ieri (15:00 invece di 14:00).
+
+Tre varianti, stesso dominio e stesso guasto:
+  fissa  il passaggio da cerca a valida e' scritto nel codice; valida vede solo il testo di cerca
+  A      agente come strumento: cerca ha anche lo strumento chiedi_verifica, che invoca valida;
+         se chiamarla e cosa passarle lo decide il modello
+  B      orchestratore: l'agente coordina ha come strumenti gli agenti cerca e valida e decide
+         lui chi chiamare, in che ordine, cosa passare e quando rispondere
 
 Strati (ognuno contiene i precedenti):
   0  oggi: una riga di log e la fattura, niente OpenTelemetry
@@ -15,6 +22,7 @@ Strati (ognuno contiene i precedenti):
   python strati.py --strato 3 --guasto             una run
   python strati.py --strato 3 --guasto --banco 5   cinque run, una riga ciascuna
   python strati.py --strato 1 --runner --guasto    strato 1 con il tool runner dell'SDK
+  python strati.py --strato 5 --variante A --guasto  agente come strumento (B: orchestratore)
   python strati.py --replay registrazioni/strato-3/<file>.json
   python strati.py --riepilogo                     una riga per strato e modo
   python strati.py --righe                         righe di codice di ogni strato
@@ -81,6 +89,42 @@ SCHEMA = {"name": "leggi_programma",
           "description": "Legge dal servizio del programma giorno, ora e sala di una sessione dell'evento.",
           "input_schema": {"type": "object", "required": ["sessione"],
                            "properties": {"sessione": {"type": "string", "description": "titolo della sessione"}}}}
+
+# --- varianti A e B: il grafo fra agenti lo decide il modello ---
+# Istruzioni come le scriverebbe un team: consigliano la verifica, non dicono cosa passare ne' lo vietano.
+CERCA_A = ("Sei l'assistente di DevFest Immaginario 2026. Per gli orari usa sempre lo strumento "
+           "leggi_programma. Prima di rispondere all'utente, fai controllare la risposta con lo strumento "
+           "chiedi_verifica. Rispondi in una riga con giorno, ora e sala.")
+COORDINA = ("Sei l'assistente di DevFest Immaginario 2026 e coordini due agenti: cerca trova le informazioni "
+            "sul programma dell'evento, valida controlla una risposta prima che arrivi all'utente. Prima di "
+            "rispondere all'utente, fai controllare la risposta da valida. Rispondi in una riga con giorno, ora e sala.")
+VALIDA_AGENTI = ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino "
+                 "all'utente. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che "
+                 "l'orario sia valido, che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente "
+                 "alla domanda e coerente con il contesto. Se va tutto bene, restituisci la risposta com'è "
+                 "aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va.")
+_VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
+             "properties": {"domanda": {"type": "string", "description": "la domanda dell'utente"},
+                            "risposta": {"type": "string", "description": "la risposta da controllare"},
+                            "contesto": {"type": "string", "description": "informazioni utili alla verifica (facoltativo)"}}}
+SCHEMI = {
+    "leggi_programma": SCHEMA,
+    "chiedi_verifica": {"name": "chiedi_verifica", "input_schema": _VERIFICA,
+                        "description": "Chiede all'agente valida di controllare una risposta prima che arrivi "
+                                       "all'utente. Restituisce la risposta verificata oppure cosa non va."},
+    "valida": {"name": "valida", "input_schema": _VERIFICA,
+               "description": "Agente che controlla una risposta prima che arrivi all'utente. Restituisce la "
+                              "risposta verificata oppure cosa non va."},
+    "cerca": {"name": "cerca",
+              "description": "Agente che trova informazioni sul programma dell'evento (sessioni, giorni, orari, "
+                             "sale) leggendo il servizio del programma. Restituisce una risposta in una riga.",
+              "input_schema": {"type": "object", "required": ["richiesta"],
+                               "properties": {"richiesta": {"type": "string", "description": "cosa cercare"}}}},
+}
+# strumento -> (agente invocato, sue istruzioni, suoi strumenti)
+AGENTI_STRUMENTO = {"chiedi_verifica": ("valida", VALIDA_AGENTI, []),
+                    "valida": ("valida", VALIDA_AGENTI, []),
+                    "cerca": ("cerca", CERCA, ["leggi_programma"])}
 PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del ragionamento torna solo se lo chiedi
 
 
@@ -108,7 +152,10 @@ def leggi_programma(sessione: str, stato: dict) -> dict:
         raise
 
 
-def esegui_strumento(id_chiamata: str, argomenti: dict, stato: dict) -> tuple[str, bool]:
+def esegui_strumento(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict,
+                     stato: dict) -> tuple[str, bool]:
+    if nome in AGENTI_STRUMENTO:
+        return chiama_agente(client, chiamante, nome, id_chiamata, argomenti, stato), False
     with tracer(3).start_as_current_span("execute_tool leggi_programma") as span:  # s3
         span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "leggi_programma",  # s3
                              "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s3
@@ -123,9 +170,35 @@ def esegui_strumento(id_chiamata: str, argomenti: dict, stato: dict) -> tuple[st
         return risultato, errore
 
 
-def ciclo(client, istruzioni: str, richiesta: str, stato: dict, strumenti: bool):
+def richiesta_di_verifica(argomenti: dict) -> str:
+    testo = f"Domanda: {argomenti.get('domanda', '')}\nRisposta dell'assistente: {argomenti.get('risposta', '')}"
+    return testo + (f"\nContesto: {argomenti['contesto']}" if argomenti.get("contesto") else "")
+
+
+def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict, stato: dict) -> str:
+    """Un agente usato come strumento: execute_tool del chiamante con dentro invoke_agent del chiamato.
+
+    Semconv GenAI, refinement "Agent as a tool" (gen_ai.execute_tool.transfer.internal). Lo span del
+    passaggio e' dello strato 2 perche' e' l'arco fra due agenti: senza, il grafo non si vede.
+    """
+    destinazione, istruzioni, strumenti = AGENTI_STRUMENTO[nome]
+    with tracer(2).start_as_current_span(f"execute_tool {nome}") as span:  # s2
+        span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": nome,  # s2
+                             "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s2
+                             "gen_ai.agent.name": chiamante, "gen_ai.transfer.mode": "return_to_caller",  # s2
+                             "gen_ai.transfer.target.name": destinazione})  # s2
+        if STRATO >= 3:  # s3  argomenti e risultato, come per leggi_programma
+            span.set_attribute("gen_ai.tool.call.arguments", json.dumps(argomenti, ensure_ascii=False))  # s3
+        richiesta = argomenti.get("richiesta", "") if destinazione == "cerca" else richiesta_di_verifica(argomenti)
+        risultato = agente(client, destinazione, istruzioni, richiesta, stato, strumenti)
+        if STRATO >= 3:  # s3
+            span.set_attribute("gen_ai.tool.call.result", risultato)  # s3
+        return risultato
+
+
+def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list):
     messaggi = [{"role": "user", "content": richiesta}]
-    extra = {"tools": [SCHEMA]} if strumenti else {}
+    extra = {"tools": [SCHEMI[n] for n in strumenti]} if strumenti else {}
     for _ in range(MAX_GIRI):
         r = client.messages.create(model=MODEL, max_tokens=4096, system=istruzioni, messages=messaggi,
                                    thinking=PENSIERO, **extra)
@@ -136,13 +209,13 @@ def ciclo(client, istruzioni: str, richiesta: str, stato: dict, strumenti: bool)
         messaggi.append({"role": "assistant", "content": r.content})
         risultati = []
         for c in chiamate:
-            risultato, errore = esegui_strumento(c.id, c.input, stato)
+            risultato, errore = esegui_strumento(client, nome, c.name, c.id, c.input, stato)
             risultati.append({"type": "tool_result", "tool_use_id": c.id, "content": risultato, "is_error": errore})
         messaggi.append({"role": "user", "content": risultati})
     raise RuntimeError(f"oltre {MAX_GIRI} giri")
 
 
-def ciclo_runner(client, istruzioni: str, richiesta: str, stato: dict, strumenti: bool):
+def ciclo_runner(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list):
     """Variante dello strato 1: il ciclo lo fa il tool runner dell'SDK, che apre da se' invoke_agent ed execute_tool."""
     @anthropic.beta_tool(name="leggi_programma", description=SCHEMA["description"])
     def strumento(sessione: str) -> str:
@@ -165,12 +238,12 @@ def ciclo_runner(client, istruzioni: str, richiesta: str, stato: dict, strumenti
     return "".join(b.text for b in ultimo.content if b.type == "text")
 
 
-def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: bool) -> str:
+def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list) -> str:
     with tracer(2).start_as_current_span(f"invoke_agent {nome}") as span:  # s2
         span.set_attributes({"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": nome,  # s2
                              "gen_ai.request.model": MODEL})  # s2
         giro = ciclo_runner if stato["runner"] else ciclo
-        return giro(client, istruzioni, richiesta, stato, strumenti)
+        return giro(client, nome, istruzioni, richiesta, stato, strumenti)
 
 
 def cliente(**prova):
@@ -196,7 +269,7 @@ def in_dict(s) -> dict:
             "errore": s.status.status_code == StatusCode.ERROR, "attributi": attributi}
 
 
-def esegui(guasto: bool, runner: bool, cartella: Path, client=None) -> dict:
+def esegui(guasto: bool, runner: bool, cartella: Path, client=None, variante: str = "fissa") -> dict:
     memoria.clear()
     client = client or cliente()
     stato = {"aperto_fino": 0.0, "guasto": guasto, "runner": runner, "fattura": []}
@@ -204,13 +277,18 @@ def esegui(guasto: bool, runner: bool, cartella: Path, client=None) -> dict:
     with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
         span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
-        bozza = agente(client, "cerca", CERCA, DOMANDA, stato, strumenti=True)
-        risposta = agente(client, "valida", VALIDA, f"Domanda: {DOMANDA}\nRisposta dell'assistente: {bozza}",
-                          stato, strumenti=False)
+        if variante == "A":  # cerca decide se e come chiamare valida
+            risposta = agente(client, "cerca", CERCA_A, DOMANDA, stato, ["leggi_programma", "chiedi_verifica"])
+        elif variante == "B":  # coordina decide chi chiamare, in che ordine e cosa passare
+            risposta = agente(client, "coordina", COORDINA, DOMANDA, stato, ["cerca", "valida"])
+        else:  # fissa: il grafo lo scrive il codice
+            bozza = agente(client, "cerca", CERCA, DOMANDA, stato, ["leggi_programma"])
+            risposta = agente(client, "valida", VALIDA, f"Domanda: {DOMANDA}\nRisposta dell'assistente: {bozza}",
+                              stato, [])
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
-    reg = {"strato": STRATO, "variante": "runner" if runner else None, "registrata": ora.isoformat(timespec="seconds"),
+    reg = {"strato": STRATO, "variante": "runner" if runner else (None if variante == "fissa" else variante), "registrata": ora.isoformat(timespec="seconds"),
            "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
@@ -346,7 +424,9 @@ def con_email(span) -> int:
 
 def mostra(reg: dict, registrata: bool = False):
     span = reg["span"]
-    titolo = f"strato {reg['strato']} · {TITOLI[reg['strato']]}" + (" · tool runner" if reg.get("variante") else "")
+    v = reg.get("variante")
+    titolo = f"strato {reg['strato']} · {TITOLI[reg['strato']]}" + (
+        " · tool runner" if v == "runner" else f" · variante {v}" if v else "")
     if registrata:
         print(c("inverso", f" REGISTRATA il {reg['registrata'].replace('T', ' alle ')} · {titolo} · {reg['modo']} "))
     else:
@@ -384,7 +464,7 @@ def esito(r: dict) -> dict:
     risposta = r["risposta"] or ""
     return {"tracce": len(per_trace(span)), "span": len(span), "chiamate": f["chiamate"],
             "strumento": sum(attr(s, "gen_ai.operation.name") == "execute_tool" for s in span),
-            "sbagliata": "15:00" in risposta, "verificato": risposta.rstrip().endswith("Verificato."),
+            "sbagliata": "15:00" in risposta, "verificato": bool(APPROVA.search(risposta)),
             "secondi": r["secondi"], "token": f["in"] + f["out"], "costo": costo(f["in"], f["cache"], f["out"]),
             "email": con_email(span), "attributi": sum(len(s["attributi"]) for s in span)}
 
@@ -415,6 +495,103 @@ def riepilogo(cartella: Path):
     print(f"\nspeso in tutto, dalle registrazioni: $ {speso:.4f}")
 
 
+# --- misure del grafo: cosa ha deciso il modello, run per run ---
+
+APPROVA = re.compile(r"verificat[oa]\b(?<!non verificato)", re.I)
+NON_CONFERMA = re.compile(r"non (posso|riesco|sono in grado|è possibile|ho potuto)|non confermat|da confermare|"
+                          r"conferm\w* (presso|con|all)|ti consiglio di (verificare|controllare)|non disponibile", re.I)
+DICE_TIMEOUT = re.compile(r"timeout|non ha risposto|errore|riprov|non (era )?disponibile|problema", re.I)
+DICE_ETA = re.compile(r"26 ore|\bieri\b|copia|cache|\betà\b", re.I)
+
+
+def grafo(span) -> list[str]:
+    """La sequenza di strumenti e agenti nell'ordine in cui sono stati chiamati: chi>che cosa, ! se in errore."""
+    per_id, passi = {s["id"]: s for s in span}, []
+    for s, _ in in_ordine(span):
+        operazione, padre = attr(s, "gen_ai.operation.name"), per_id.get(s["padre"])
+        if operazione == "execute_tool":
+            chi = attr(s, "gen_ai.agent.name") or agente_di(s, per_id)
+            passi.append(f"{chi}>{attr(s, 'gen_ai.tool.name')}" + ("!" if s["errore"] else ""))
+        elif operazione == "invoke_agent" and not (padre and attr(padre, "gen_ai.operation.name") == "execute_tool"):
+            passi.append(f"codice>{attr(s, 'gen_ai.agent.name')}")  # un agente chiamato dal codice, non da un modello
+    return passi
+
+
+def ingresso_di(agente_span, span) -> str:
+    """Cosa ha letto l'agente alla prima chiamata al modello (strato 5): il messaggio utente che gli e' arrivato."""
+    figli = sorted((s for s in span if s["padre"] == agente_span["id"] and token(s)), key=lambda s: s["inizio"])
+    if not figli:
+        return ""
+    messaggi = json.loads(attr(figli[0], "gen_ai.input.messages") or "[]")
+    return " ".join(p.get("content", "") for m in messaggi[:1] for p in m.get("parts", []) if p.get("type") == "text")
+
+
+def misura(r: dict) -> dict:
+    span, risposta = r["span"], r["risposta"] or ""
+    passi = grafo(span)
+    leggi = [i for i, p in enumerate(passi) if ">leggi_programma" in p]
+    primo_errore = next((i for i in leggi if passi[i].endswith("!")), None)
+    valide = [s for s in span if attr(s, "gen_ai.operation.name") == "invoke_agent" and attr(s, "gen_ai.agent.name") == "valida"]
+    a_valida = [ingresso_di(s, span) for s in valide]
+    livelli = [lv for _, lv in in_ordine(span)]
+    archi = sorted((s for s in span if attr(s, "gen_ai.transfer.target.name")), key=lambda s: s["inizio"])
+    trasferimenti = [json.loads(attr(s, "gen_ai.tool.call.arguments") or "{}") for s in archi
+                     if attr(s, "gen_ai.transfer.target.name") == "valida"]
+    verdetti = [attr(s, "gen_ai.tool.call.result") or "" for s in archi if attr(s, "gen_ai.transfer.target.name") == "valida"]
+    if not verdetti:  # pipeline fissa: il verdetto di valida e' la risposta
+        verdetti = [risposta] if valide else []
+    contesti = [a.get("contesto", "") for a in trasferimenti]
+    return {**esito(r), "grafo": " ".join(passi), "profondita": max(livelli) + 1 if livelli else 0,
+            "riprove": 0 if primo_errore is None else sum(i > primo_errore for i in leggi),
+            "ora": "15:00" if "15:00" in risposta and "14:00" not in risposta else
+                   "14:00" if "14:00" in risposta and "15:00" not in risposta else
+                   "entrambe" if "14:00" in risposta else "nessuna",
+            "non_conferma": bool(NON_CONFERMA.search(risposta)),
+            "valida": len(valide),
+            "contesto": sum(bool(x) for x in contesti),
+            "valida_vede_dato": sum(bool(re.search(r"\d\d:\d\d", x)) for x in contesti),  # un orario nel contesto
+            "valida_vede_timeout": sum(bool(DICE_TIMEOUT.search(x)) for x in a_valida),
+            "valida_vede_eta": sum(bool(DICE_ETA.search(x)) for x in a_valida),
+            "valida_approva": sum(bool(APPROVA.search(v)) and not re.search(r"non (verificat|approvat|superat)|verifica non", v, re.I)
+                                  for v in verdetti),
+            "email_a_valida": sum(bool(EMAIL.search(x)) for x in a_valida),
+            "cerca_di_nuovo": max(0, sum(attr(s, "gen_ai.transfer.target.name") == "cerca" for s in archi) - 1),
+            "a_valida": a_valida, "argomenti": trasferimenti}
+
+
+def misure(cartelle: list[Path]):
+    for cartella in cartelle:
+        regs = [json.loads(f.read_text()) for f in sorted(cartella.glob("*.json"))]
+        if not regs:
+            continue
+        print(c("inverso", f" {cartella.name} "))
+        for modo in ("guasto", "sana"):
+            mm = [misura(r) for r in regs if r["modo"] == modo]
+            if not mm:
+                continue
+            conta = lambda f: sum(1 for m in mm if f(m))
+            med = lambda k: statistics.median(m[k] for m in mm)
+            print(f"{modo}: n {len(mm)} · riprova lo strumento {conta(lambda m: m['riprove'] > 0)} "
+                  f"(riprove dopo il timeout in tutto {sum(m["riprove"] for m in mm)}) · 15:00 {conta(lambda m: m['ora'] == '15:00')} · "
+                  f"14:00 {conta(lambda m: m['ora'] == '14:00')} · entrambe {conta(lambda m: m['ora'] == 'entrambe')} · "
+                  f"nessuna ora {conta(lambda m: m['ora'] == 'nessuna')} · dice di non poter confermare {conta(lambda m: m['non_conferma'])} · "
+                  f"approvazione {conta(lambda m: m['verificato'])}")
+            print(f"  valida chiamata: in {conta(lambda m: m['valida'] > 0)} run, {sum(m['valida'] for m in mm)} volte · "
+                  f"con contesto {sum(m['contesto'] for m in mm)} · le arriva il dato dello strumento {sum(m['valida_vede_dato'] for m in mm)} · "
+                  f"il timeout {sum(m['valida_vede_timeout'] for m in mm)} · l'età {sum(m['valida_vede_eta'] for m in mm)} · "
+                  f"l'email {sum(m['email_a_valida'] for m in mm)} · valida approva {sum(m['valida_approva'] for m in mm)} · "
+                  f"cerca richiamata {sum(m['cerca_di_nuovo'] for m in mm)}")
+            print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello {med('chiamate'):.0f} · "
+                  f"token {med('token'):.0f} · secondi {med('secondi'):.1f} · $ {med('costo'):.6f}")
+            grafi = {}
+            for m in mm:
+                grafi[m["grafo"]] = grafi.get(m["grafo"], 0) + 1
+            print(f"  {len(grafi)} grafi diversi:")
+            for g, n in sorted(grafi.items(), key=lambda kv: -kv[1]):
+                print(f"    {n:>2} × {g}")
+        print()
+
+
 def righe():
     """Le righe di codice di ogni strato, contate dai marcatori sN dopo il cancelletto."""
     testo = Path(__file__).read_text().splitlines()
@@ -428,23 +605,29 @@ if __name__ == "__main__":
     p.add_argument("--strato", type=int, choices=range(6), default=0)
     p.add_argument("--guasto", action="store_true")
     p.add_argument("--runner", action="store_true", help="solo con --strato 1: il ciclo lo fa il tool runner dell'SDK")
+    p.add_argument("--variante", choices=["fissa", "A", "B"], default="fissa",
+                   help="A: agente come strumento; B: orchestratore")
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
+    p.add_argument("--misure", type=int, metavar="STRATO", help="grafo, riprove, verifiche e risposte per variante")
     p.add_argument("--righe", action="store_true")
     a = p.parse_args()
     if a.righe:
         righe()
+    elif a.misure is not None:
+        misure([QUI / "registrazioni" / f"strato-{a.misure}{v}" for v in ("", "-A", "-B")])
     elif a.riepilogo:
         riepilogo(QUI / "registrazioni")
     elif a.replay:
         mostra(json.loads(Path(a.replay).read_text()), registrata=True)
     else:
-        if a.runner and a.strato != 1:
-            raise SystemExit("--runner si confronta con lo strato 1: usalo con --strato 1")
+        if a.runner and (a.strato != 1 or a.variante != "fissa"):
+            raise SystemExit("--runner si confronta con lo strato 1 della pipeline fissa")
         STRATO = a.strato
-        cartella = QUI / "registrazioni" / (f"strato-{a.strato}" + ("-runner" if a.runner else ""))
+        coda = "-runner" if a.runner else ("" if a.variante == "fissa" else f"-{a.variante}")
+        cartella = QUI / "registrazioni" / f"strato-{a.strato}{coda}"
         if a.banco:
-            banco([esegui(a.guasto, a.runner, cartella) for _ in range(a.banco)])
+            banco([esegui(a.guasto, a.runner, cartella, variante=a.variante) for _ in range(a.banco)])
         else:
-            mostra(esegui(a.guasto, a.runner, cartella))
+            mostra(esegui(a.guasto, a.runner, cartella, variante=a.variante))
