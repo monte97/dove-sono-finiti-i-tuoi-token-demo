@@ -541,7 +541,7 @@ def esito(r: dict) -> dict:
     dominio = DOMINI[r.get("dominio", "orario")]  # le registrazioni prima del freeze sono tutte sull'orario
     return {"tracce": len(per_trace(span)), "span": len(span), "chiamate": f["chiamate"],
             "strumento": sum(attr(s, "gen_ai.operation.name") == "execute_tool" for s in span),
-            "sbagliata": dominio["sbagliata"](risposta), "verificato": bool(APPROVA.search(risposta)),
+            "sbagliata": dominio["sbagliata"](risposta), "verificato": approva(risposta),
             "secondi": r["secondi"], "token": f["in"] + f["out"], "costo": costo(f["in"], f["cache"], f["out"]),
             "email": con_email(span), "attributi": sum(len(s["attributi"]) for s in span)}
 
@@ -574,7 +574,11 @@ def riepilogo(cartella: Path):
 
 # --- misure del grafo: cosa ha deciso il modello, run per run ---
 
-APPROVA = re.compile(r"verificat[oa]\b(?<!non verificato)", re.I)
+def approva(testo: str) -> bool:
+    """valida approva quando chiude con «Verificato.»: chi lo cita per rifiutarlo, o scrive «verificare», non approva."""
+    return testo.rstrip(" \n\"'»*").endswith("Verificato.")
+
+
 NON_CONFERMA = re.compile(r"non (posso|riesco|sono in grado|è possibile|ho potuto)|non confermat|da confermare|"
                           r"conferm\w* (presso|con|all)|ti consiglio di (verificare|controllare)|non disponibile", re.I)
 DICE_TIMEOUT = re.compile(r"timeout|non ha risposto|errore|riprov|non (era )?disponibile|problema", re.I)
@@ -628,8 +632,7 @@ def misura(r: dict) -> dict:
             "valida_vede_dato": sum(bool(dominio["dato"].search(x)) for x in contesti),  # il dato nel contesto
             "valida_vede_timeout": sum(bool(DICE_TIMEOUT.search(x)) for x in a_valida),
             "valida_vede_eta": sum(bool(DICE_ETA.search(x)) for x in a_valida),
-            "valida_approva": sum(bool(APPROVA.search(v)) and not re.search(r"non (verificat|approvat|superat)|verifica non", v, re.I)
-                                  for v in verdetti),
+            "valida_approva": sum(approva(v) for v in verdetti),
             "email_a_valida": sum(bool(EMAIL.search(x)) for x in a_valida),
             "avvisa": bool(AVVISO.search(risposta)),
             # l'eta' negli argomenti dell'arco verso valida (dallo strato 3): il messaggio di valida e' fatto di questi

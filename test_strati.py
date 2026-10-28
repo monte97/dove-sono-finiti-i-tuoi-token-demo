@@ -269,6 +269,16 @@ def test_codice_pulito():
     assert "\nspan.set_attribute(\"gen_ai.tool.call.arguments\"" in t  # il corpo dell'if perde il rientro
 
 
+def test_approva_solo_un_verificato_in_fondo():
+    # verdetti veri di valida, banco del 28/10
+    assert s.approva("Il workshop è oggi alle 15:00 in sala B (ultimo aggiornamento 26 ore fa). Verificato.")
+    assert s.approva("«Il workshop è oggi alle 15:00 in sala B.» Verificato.**")
+    assert not s.approva('Il dato va confermato. Non è stato aggiunto "Verificato.".')
+    assert not s.approva("Non posso aggiungere «Verificato.» alla versione attuale.")
+    assert not s.approva("Il dato potrebbe non essere aggiornato, conviene verificarlo presso la segreteria.")
+    assert not s.approva("Conviene verificare sul programma ufficiale orario, sala e giorno.")
+
+
 def test_replay_registrazione_dello_spike():
     reg, _ = corri(3)
     vecchia = {**json.loads(json.dumps(reg)), "variante": "A"}  # come le registrazioni nel tag spike-a-b
