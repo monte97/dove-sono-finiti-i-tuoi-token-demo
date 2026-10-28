@@ -157,6 +157,16 @@ def test_orchestratore_grafo():
     assert m["profondita"] == 6 and m["contesto"] == 0 and m["verificato"]
 
 
+def test_dominio_orario_invariato():
+    reg, _ = corri(5)
+    m = s.misura(reg)
+    assert m["grafo"] == ("codice>coordina coordina>cerca cerca>leggi_programma! cerca>leggi_programma "
+                          "coordina>valida")
+    assert m["esito"] == "sbagliata"
+    assert s.DOMINI["orario"]["sbagliata"]("Oggi alle 15:00, sala B.")
+    assert s.DOMINI["orario"]["giusta"]("Oggi alle 14:00, sala B.")
+
+
 def test_replay_registrazione_dello_spike():
     reg, _ = corri(3)
     vecchia = {**json.loads(json.dumps(reg)), "variante": "A"}  # come le registrazioni nel tag spike-a-b

@@ -63,72 +63,95 @@ MODEL = "claude-haiku-5-5"
 LISTINO = (0.10, 0.01, 0.50)  # USD per milione: ingresso, letto dalla cache, uscita (ragionamento compreso); letto il 23/10/2026
 MAX_GIRI = 6
 
-DOMANDA = ("Ciao, sono Giulia Rossi (giulia.rossi@example.com). "
-           "A che ora è il workshop Kubernetes da zero?")
-PROGRAMMA = {"Kubernetes da zero": {"giorno": "oggi", "ora": "14:00", "sala": "B"},  # spostato stamattina
-             "OpenTelemetry in un'ora": {"giorno": "oggi", "ora": "11:00", "sala": "A"},
-             "Rust per chi scrive Go": {"giorno": "domani", "ora": "16:30", "sala": "C"}}
-COPIA_DI_IERI = {**PROGRAMMA, "Kubernetes da zero": {"giorno": "oggi", "ora": "15:00", "sala": "B"}}
 ETA_COPIA_ORE = 26
 TIMEOUT_S = 2.0
 FINESTRA_S = 120
 
-CERCA = ("Sei l'assistente di DevFest Immaginario 2026. Per gli orari usa sempre lo strumento "
-         "leggi_programma. Rispondi in una riga con giorno, ora e sala.")
-SCHEMA = {"name": "leggi_programma",
-          "description": "Legge dal servizio del programma giorno, ora e sala di una sessione dell'evento.",
-          "input_schema": {"type": "object", "required": ["sessione"],
-                           "properties": {"sessione": {"type": "string", "description": "titolo della sessione"}}}}
-
+# Il dominio: domanda, dati di oggi e di ieri, istruzioni degli agenti, strumento. Codice e guasto non cambiano.
 # Istruzioni come le scriverebbe un team: consigliano la verifica, non dicono cosa passare ne' lo vietano.
-COORDINA = ("Sei l'assistente di DevFest Immaginario 2026 e coordini due agenti: cerca trova le informazioni "
-            "sul programma dell'evento, valida controlla una risposta prima che arrivi all'utente. Prima di "
-            "rispondere all'utente, fai controllare la risposta da valida. Rispondi in una riga con giorno, ora e sala.")
-VALIDA = ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino "
-          "all'utente. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che "
-          "l'orario sia valido, che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente "
-          "alla domanda e coerente con il contesto. Se va tutto bene, restituisci la risposta com'è "
-          "aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va.")
+DOMINI = {
+    "orario": {
+        "workflow": "assistente-evento", "cartella": "",
+        "domanda": ("Ciao, sono Giulia Rossi (giulia.rossi@example.com). "
+                    "A che ora è il workshop Kubernetes da zero?"),
+        "oggi": {"Kubernetes da zero": {"giorno": "oggi", "ora": "14:00", "sala": "B"},  # spostato stamattina
+                 "OpenTelemetry in un'ora": {"giorno": "oggi", "ora": "11:00", "sala": "A"},
+                 "Rust per chi scrive Go": {"giorno": "domani", "ora": "16:30", "sala": "C"}},
+        "ieri": {"Kubernetes da zero": {"giorno": "oggi", "ora": "15:00", "sala": "B"}},
+        "servizio": "il servizio del programma",
+        "strumento": "leggi_programma", "campo": "sessione", "descrizione_campo": "titolo della sessione",
+        "descrizione": "Legge dal servizio del programma giorno, ora e sala di una sessione dell'evento.",
+        "descrizione_cerca": ("Agente che trova informazioni sul programma dell'evento (sessioni, giorni, orari, "
+                              "sale) leggendo il servizio del programma. Restituisce una risposta in una riga."),
+        "cerca": ("Sei l'assistente di DevFest Immaginario 2026. Per gli orari usa sempre lo strumento "
+                  "leggi_programma. Rispondi in una riga con giorno, ora e sala."),
+        "coordina": ("Sei l'assistente di DevFest Immaginario 2026 e coordini due agenti: cerca trova le informazioni "
+                     "sul programma dell'evento, valida controlla una risposta prima che arrivi all'utente. Prima di "
+                     "rispondere all'utente, fai controllare la risposta da valida. Rispondi in una riga con giorno, "
+                     "ora e sala."),
+        "valida": ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino "
+                   "all'utente. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che "
+                   "l'orario sia valido, che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente "
+                   "alla domanda e coerente con il contesto. Se va tutto bene, restituisci la risposta com'è "
+                   "aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va."),
+        "sbagliata": lambda r: "15:00" in r and "14:00" not in r,
+        "giusta": lambda r: "14:00" in r and "15:00" not in r,
+        "dato": re.compile(r"\d\d:\d\d"),  # il dato dello strumento, se arriva a valida
+    },
+}
+DOMINIO = DOMINI["orario"]
+
 _VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
              "properties": {"domanda": {"type": "string", "description": "la domanda dell'utente"},
                             "risposta": {"type": "string", "description": "la risposta da controllare"},
                             "contesto": {"type": "string", "description": "informazioni utili alla verifica (facoltativo)"}}}
-SCHEMI = {
-    "leggi_programma": SCHEMA,
-    "valida": {"name": "valida", "input_schema": _VERIFICA,
-               "description": "Agente che controlla una risposta prima che arrivi all'utente. Restituisce la "
-                              "risposta verificata oppure cosa non va."},
-    "cerca": {"name": "cerca",
-              "description": "Agente che trova informazioni sul programma dell'evento (sessioni, giorni, orari, "
-                             "sale) leggendo il servizio del programma. Restituisce una risposta in una riga.",
-              "input_schema": {"type": "object", "required": ["richiesta"],
-                               "properties": {"richiesta": {"type": "string", "description": "cosa cercare"}}}},
-}
-# strumento -> (agente invocato, sue istruzioni, suoi strumenti)
-AGENTI_STRUMENTO = {"valida": ("valida", VALIDA, []),
-                    "cerca": ("cerca", CERCA, ["leggi_programma"])}
+
+
+def schemi() -> dict:
+    d = DOMINIO
+    return {
+        d["strumento"]: {"name": d["strumento"], "description": d["descrizione"],
+                         "input_schema": {"type": "object", "required": [d["campo"]],
+                                          "properties": {d["campo"]: {"type": "string",
+                                                                      "description": d["descrizione_campo"]}}}},
+        "valida": {"name": "valida", "input_schema": _VERIFICA,
+                   "description": "Agente che controlla una risposta prima che arrivi all'utente. Restituisce la "
+                                  "risposta verificata oppure cosa non va."},
+        "cerca": {"name": "cerca", "description": d["descrizione_cerca"],
+                  "input_schema": {"type": "object", "required": ["richiesta"],
+                                   "properties": {"richiesta": {"type": "string", "description": "cosa cercare"}}}},
+    }
+
+
+def agenti_strumento() -> dict:
+    """strumento -> (agente invocato, sue istruzioni, suoi strumenti)"""
+    return {"valida": ("valida", DOMINIO["valida"], []),
+            "cerca": ("cerca", DOMINIO["cerca"], [DOMINIO["strumento"]])}
+
+
 PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del ragionamento torna solo se lo chiedi
 
 
-def servizio_programma(sessione: str, guasto: bool):
+def servizio(chiave: str, guasto: bool):
     if guasto:
         time.sleep(TIMEOUT_S)
-        raise TimeoutError(f"il servizio del programma non ha risposto entro {TIMEOUT_S:g} secondi")
+        raise TimeoutError(f"{DOMINIO['servizio']} non ha risposto entro {TIMEOUT_S:g} secondi")
     time.sleep(0.3)
-    return PROGRAMMA[sessione]
+    return DOMINIO["oggi"][chiave]
 
 
-def leggi_programma(sessione: str, stato: dict) -> dict:
-    titolo = next((t for t in PROGRAMMA if t.lower() in sessione.lower() or sessione.lower() in t.lower()), None)
-    if titolo is None:
-        return {"errore": "sessione non trovata", "sessioni": list(PROGRAMMA)}
+def leggi_dato(chiave: str, stato: dict) -> dict:
+    oggi = DOMINIO["oggi"]
+    trovata = next((k for k in oggi if k.lower() in chiave.lower() or chiave.lower() in k.lower()), None)
+    if trovata is None:
+        return {"errore": "non trovato", "disponibili": list(oggi)}
     if time.monotonic() < stato["aperto_fino"]:
         with tracer(4).start_as_current_span("cache.read") as span:  # s4
             span.set_attributes({"cache.hit": True, "cache.age_hours": ETA_COPIA_ORE,  # s4
                                  "cache.reason": "interruttore aperto dopo un timeout del servizio"})  # s4
-            return COPIA_DI_IERI[titolo]  # l'eta' non arriva al modello
+            return {**oggi, **DOMINIO["ieri"]}[trovata]  # l'eta' non arriva al modello
     try:
-        return servizio_programma(titolo, stato["guasto"])
+        return servizio(trovata, stato["guasto"])
     except TimeoutError:
         stato["aperto_fino"] = time.monotonic() + FINESTRA_S
         raise
@@ -136,14 +159,14 @@ def leggi_programma(sessione: str, stato: dict) -> dict:
 
 def esegui_strumento(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict,
                      stato: dict) -> tuple[str, bool]:
-    if nome in AGENTI_STRUMENTO:
+    if nome in agenti_strumento():
         return chiama_agente(client, chiamante, nome, id_chiamata, argomenti, stato), False
-    with tracer(3).start_as_current_span("execute_tool leggi_programma") as span:  # s3
-        span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "leggi_programma",  # s3
+    with tracer(3).start_as_current_span(f"execute_tool {nome}") as span:  # s3
+        span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": nome,  # s3
                              "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s3
                              "gen_ai.tool.call.arguments": json.dumps(argomenti, ensure_ascii=False)})  # s3
         try:
-            risultato, errore = json.dumps(leggi_programma(argomenti.get("sessione", ""), stato), ensure_ascii=False), False
+            risultato, errore = json.dumps(leggi_dato(argomenti.get(DOMINIO["campo"], ""), stato), ensure_ascii=False), False
         except TimeoutError as e:
             span.set_status(Status(StatusCode.ERROR, str(e)))  # s3
             span.set_attribute("error.type", "timeout")  # s3
@@ -163,7 +186,7 @@ def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti
     Semconv GenAI, refinement "Agent as a tool" (gen_ai.execute_tool.transfer.internal). Lo span del
     passaggio e' dello strato 2 perche' e' l'arco fra due agenti: senza, il grafo non si vede.
     """
-    destinazione, istruzioni, strumenti = AGENTI_STRUMENTO[nome]
+    destinazione, istruzioni, strumenti = agenti_strumento()[nome]
     with tracer(2).start_as_current_span(f"execute_tool {nome}") as span:  # s2
         span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": nome,  # s2
                              "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s2
@@ -180,7 +203,7 @@ def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti
 
 def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list):
     messaggi = [{"role": "user", "content": richiesta}]
-    extra = {"tools": [SCHEMI[n] for n in strumenti]} if strumenti else {}
+    extra = {"tools": [schemi()[n] for n in strumenti]} if strumenti else {}
     for _ in range(MAX_GIRI):
         r = client.messages.create(model=MODEL, max_tokens=4096, system=istruzioni, messages=messaggi,
                                    thinking=PENSIERO, **extra)
@@ -232,16 +255,16 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     client = client or cliente()
     stato = {"aperto_fino": 0.0, "guasto": guasto, "fattura": []}
     inizio = time.monotonic()  # s0
-    with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
+    with tracer(2).start_as_current_span(f"invoke_workflow {DOMINIO['workflow']}") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
-        span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
+        span.set_attribute("gen_ai.workflow.name", DOMINIO["workflow"])  # s2
         # coordina decide chi chiamare, in che ordine e cosa passare
-        risposta = agente(client, "coordina", COORDINA, DOMANDA, stato, ["cerca", "valida"])
+        risposta = agente(client, "coordina", DOMINIO["coordina"], DOMINIO["domanda"], stato, ["cerca", "valida"])
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
-    reg = {"strato": STRATO, "registrata": ora.isoformat(timespec="seconds"),
-           "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
+    reg = {"strato": STRATO, "dominio": nome_dominio(), "registrata": ora.isoformat(timespec="seconds"),
+           "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMINIO["domanda"], "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
                        "cache": sum(x.cache_read_input_tokens or 0 for x in u),
@@ -411,12 +434,17 @@ def mostra(reg: dict, registrata: bool = False):
 
 # --- banco e riepilogo ---
 
+def nome_dominio() -> str:
+    return next(n for n, d in DOMINI.items() if d is DOMINIO)
+
+
 def esito(r: dict) -> dict:
     span, f = r["span"], r["fattura"]
     risposta = r["risposta"] or ""
+    dominio = DOMINI[r.get("dominio", "orario")]  # le registrazioni prima del freeze sono tutte sull'orario
     return {"tracce": len(per_trace(span)), "span": len(span), "chiamate": f["chiamate"],
             "strumento": sum(attr(s, "gen_ai.operation.name") == "execute_tool" for s in span),
-            "sbagliata": "15:00" in risposta, "verificato": bool(APPROVA.search(risposta)),
+            "sbagliata": dominio["sbagliata"](risposta), "verificato": bool(APPROVA.search(risposta)),
             "secondi": r["secondi"], "token": f["in"] + f["out"], "costo": costo(f["in"], f["cache"], f["out"]),
             "email": con_email(span), "attributi": sum(len(s["attributi"]) for s in span)}
 
@@ -435,14 +463,14 @@ def riepilogo(cartella: Path):
         r = json.loads(f.read_text())
         e = esito(r)
         speso += e["costo"]
-        gruppi.setdefault((r["strato"], r.get("variante") or "", r["modo"]), []).append(e)
-    print(f"{'strato':>6} {'variante':8} {'modo':6} {'n':>3} {'trace':>5} {'span':>4} {'attr':>4} {'chiam.':>6} "
-          f"{'15:00':>5} {'verif.':>6} {'email':>5} {'sec med':>7} {'token med':>9} {'$ med':>9}")
-    for (strato, variante, modo), ee in sorted(gruppi.items()):
+        gruppi.setdefault((f.parent.name, r["modo"]), []).append(e)
+    print(f"{'cartella':<28} {'modo':6} {'n':>3} {'trace':>5} {'span':>4} {'attr':>4} {'chiam.':>6} "
+          f"{'sbagl.':>6} {'verif.':>6} {'email':>5} {'sec med':>7} {'token med':>9} {'$ med':>9}")
+    for (cartella_, modo), ee in sorted(gruppi.items()):
         conta = lambda k: sum(e[k] for e in ee)
         med = lambda k: statistics.median(e[k] for e in ee)
-        print(f"{strato:>6} {variante:8} {modo:6} {len(ee):>3} {med('tracce'):>5.0f} {med('span'):>4.0f} "
-              f"{med('attributi'):>4.0f} {med('chiamate'):>6.0f} {conta('sbagliata'):>5} {conta('verificato'):>6} "
+        print(f"{cartella_:<28} {modo:6} {len(ee):>3} {med('tracce'):>5.0f} {med('span'):>4.0f} "
+              f"{med('attributi'):>4.0f} {med('chiamate'):>6.0f} {conta('sbagliata'):>6} {conta('verificato'):>6} "
               f"{med('email'):>5.0f} {med('secondi'):>7.1f} {med('token'):>9.0f} {med('costo'):>9.6f}")
     print(f"\nspeso in tutto, dalle registrazioni: $ {speso:.4f}")
 
@@ -481,7 +509,8 @@ def ingresso_di(agente_span, span) -> str:
 def misura(r: dict) -> dict:
     span, risposta = r["span"], r["risposta"] or ""
     passi = grafo(span)
-    leggi = [i for i, p in enumerate(passi) if ">leggi_programma" in p]
+    dominio = DOMINI[r.get("dominio", "orario")]
+    leggi = [i for i, p in enumerate(passi) if f">{dominio['strumento']}" in p]
     primo_errore = next((i for i in leggi if passi[i].endswith("!")), None)
     valide = [s for s in span if attr(s, "gen_ai.operation.name") == "invoke_agent" and attr(s, "gen_ai.agent.name") == "valida"]
     a_valida = [ingresso_di(s, span) for s in valide]
@@ -493,13 +522,12 @@ def misura(r: dict) -> dict:
     contesti = [a.get("contesto", "") for a in trasferimenti]
     return {**esito(r), "grafo": " ".join(passi), "profondita": max(livelli) + 1 if livelli else 0,
             "riprove": 0 if primo_errore is None else sum(i > primo_errore for i in leggi),
-            "ora": "15:00" if "15:00" in risposta and "14:00" not in risposta else
-                   "14:00" if "14:00" in risposta and "15:00" not in risposta else
-                   "entrambe" if "14:00" in risposta else "nessuna",
+            "esito": "sbagliata" if dominio["sbagliata"](risposta) else "giusta" if dominio["giusta"](risposta) else
+                     "non conferma" if NON_CONFERMA.search(risposta) else "altro",
             "non_conferma": bool(NON_CONFERMA.search(risposta)),
             "valida": len(valide),
             "contesto": sum(bool(x) for x in contesti),
-            "valida_vede_dato": sum(bool(re.search(r"\d\d:\d\d", x)) for x in contesti),  # un orario nel contesto
+            "valida_vede_dato": sum(bool(dominio["dato"].search(x)) for x in contesti),  # il dato nel contesto
             "valida_vede_timeout": sum(bool(DICE_TIMEOUT.search(x)) for x in a_valida),
             "valida_vede_eta": sum(bool(DICE_ETA.search(x)) for x in a_valida),
             "valida_approva": sum(bool(APPROVA.search(v)) and not re.search(r"non (verificat|approvat|superat)|verifica non", v, re.I)
@@ -522,9 +550,9 @@ def misure(cartelle: list[Path]):
             conta = lambda f: sum(1 for m in mm if f(m))
             med = lambda k: statistics.median(m[k] for m in mm)
             print(f"{modo}: n {len(mm)} · riprova lo strumento {conta(lambda m: m['riprove'] > 0)} "
-                  f"(riprove dopo il timeout in tutto {sum(m["riprove"] for m in mm)}) · 15:00 {conta(lambda m: m['ora'] == '15:00')} · "
-                  f"14:00 {conta(lambda m: m['ora'] == '14:00')} · entrambe {conta(lambda m: m['ora'] == 'entrambe')} · "
-                  f"nessuna ora {conta(lambda m: m['ora'] == 'nessuna')} · dice di non poter confermare {conta(lambda m: m['non_conferma'])} · "
+                  f"(riprove dopo il timeout in tutto {sum(m["riprove"] for m in mm)}) · "
+                  + " · ".join(f"{e} {conta(lambda m, e=e: m['esito'] == e)}" for e in ("sbagliata", "giusta", "non conferma", "altro"))
+                  + f" · dice di non poter confermare {conta(lambda m: m['non_conferma'])} · "
                   f"approvazione {conta(lambda m: m['verificato'])}")
             print(f"  valida chiamata: in {conta(lambda m: m['valida'] > 0)} run, {sum(m['valida'] for m in mm)} volte · "
                   f"con contesto {sum(m['contesto'] for m in mm)} · le arriva il dato dello strumento {sum(m['valida_vede_dato'] for m in mm)} · "
@@ -554,6 +582,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--strato", type=int, choices=range(6), default=0)
     p.add_argument("--guasto", action="store_true")
+    p.add_argument("--dominio", choices=list(DOMINI), default="orario")
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
@@ -569,8 +598,8 @@ if __name__ == "__main__":
     elif a.replay:
         mostra(json.loads(Path(a.replay).read_text()), registrata=True)
     else:
-        STRATO = a.strato
-        cartella = QUI / "registrazioni" / f"strato-{a.strato}"
+        STRATO, DOMINIO = a.strato, DOMINI[a.dominio]
+        cartella = QUI / "registrazioni" / f"strato-{a.strato}{DOMINIO['cartella']}"
         if a.banco:
             banco([esegui(a.guasto, cartella) for _ in range(a.banco)])
         else:
