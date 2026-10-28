@@ -91,7 +91,9 @@ def fai_provider(maschera: bool) -> TracerProvider:
     global _vero
     provider = TracerProvider()  # s1
     processore = SimpleSpanProcessor(memoria)  # s1
-    provider.add_span_processor(MascheraEmail(processore) if maschera else processore)  # s1
+    if maschera:  # s5
+        processore = MascheraEmail(processore)  # s5
+    provider.add_span_processor(processore)  # s1
     _vero = provider.get_tracer("osservare-a-strati")
     return provider
 
@@ -114,7 +116,10 @@ FINESTRA_S = 120
 
 # Freeze: la risposta giusta nomina un fatto che c'e' solo nel calendario di oggi; la sbagliata dice si'.
 FATTI_DI_OGGI = re.compile(r"lunedì|black friday|09:12", re.I)
-VIA_LIBERA = re.compile(r"\bpuoi\b|consentit|è possibile|via libera", re.I)
+FERMO = re.compile(r"(?<!non )\bè in freeze|freeze in corso|non puoi|non è (possibile|consentit)", re.I)
+VIA_LIBERA = re.compile(r"(?<!non )\bpuoi\b|(?<!non è )consentit|(?<!non )è possibile|via libera", re.I)
+DUBBIO = re.compile(r"conferm|non (so|saprei)\b", re.I)  # «no, non posso confermare» non e' un no
+SI = re.compile(r"(^|[,:.]\s*)sì\b", re.I)  # un sì che apre la risposta, non «sì o no»
 
 # Il dominio: domanda, dati di oggi e di ieri, istruzioni degli agenti, strumento. Codice e guasto non cambiano.
 # Istruzioni come le scriverebbe un team: consigliano la verifica, non dicono cosa passare ne' lo vietano.
@@ -174,9 +179,9 @@ DOMINI = {
                    "Verifica che il servizio esista (i servizi sono pagamenti, catalogo e ricerca), che la risposta dica "
                    "chiaramente sì o no e che sia pertinente alla domanda e coerente con il contesto. Se va tutto bene, "
                    "restituisci la risposta com'è aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va."),
-        "sbagliata": lambda r: not FATTI_DI_OGGI.search(r) and bool(
-            re.search(r"\bsì\b", r, re.I) or (VIA_LIBERA.search(r) and not NON_CONFERMA.search(r))),
-        "giusta": lambda r: bool(FATTI_DI_OGGI.search(r)),
+        "sbagliata": lambda r: not DOMINI["freeze"]["giusta"](r) and bool(
+            SI.search(r) or (VIA_LIBERA.search(r) and not NON_CONFERMA.search(r))),
+        "giusta": lambda r: bool(FATTI_DI_OGGI.search(r) or (FERMO.search(r) and not DUBBIO.search(r))),
         "dato": re.compile(r"freeze", re.I),
     },
 }
@@ -320,8 +325,11 @@ def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, stru
 def cliente(**prova):
     if STRATO == 0:
         return anthropic.Anthropic(open_telemetry=False, **prova)
-    modo = "content" if STRATO >= 5 else "metadata_only"  # s5
-    return anthropic.Anthropic(open_telemetry={"tracer_provider": fai_provider(MASCHERA),  # s1
+    provider = fai_provider(MASCHERA)
+    modo = "metadata_only"  # s1
+    if STRATO >= 5:  # s5
+        modo = "content"  # s5
+    return anthropic.Anthropic(open_telemetry={"tracer_provider": provider,  # s1
                                                "traces": {"content_mode": modo}}, **prova)  # s1
 
 

@@ -199,6 +199,11 @@ def test_freeze_esito():
                     "No, al momento non posso confermare che il deploy del servizio pagamenti sia consentito."]
     assert all(d["sbagliata"](x) and not d["giusta"](x) for x in sbagliate)
     assert not any(d["sbagliata"](x) or d["giusta"](x) for x in non_conferma)
+    # una risposta giusta e corta, senza date (revisione finale, I1)
+    giuste_corte = ["No, pagamenti è in freeze: non puoi fare il deploy adesso.",
+                    "Non è possibile fare il deploy di pagamenti adesso, è in freeze."]
+    assert all(d["giusta"](x) and not d["sbagliata"](x) for x in giuste_corte)
+    assert not d["sbagliata"]("Non saprei dirti sì o no: il calendario dei freeze non risponde.")
     with dominio("freeze"):
         reg, _ = corri(5)
     m = s.misura({**reg, "risposta": "Non riesco a confermarlo, il calendario non ha risposto."})
@@ -251,6 +256,10 @@ def test_maschera_email():
 
 
 def test_codice_pulito():
+    for n in range(6):  # niente impalcatura della demo in nessuno strato (revisione finale, I2)
+        assert not any(x in s.codice(n) for x in ("STRATO", "fai_provider", "MASCHERA")), n
+    assert 'modo = "content"' in s.codice(5) and "MascheraEmail(processore)" in s.codice(5)
+    assert "MascheraEmail" not in s.codice(1) and '"tracer_provider": provider' in s.codice(1)
     t = s.codice(4)
     assert 'start_as_current_span("cache.read")' in t and "cache.age_hours" in t
     assert "tracer(4)" not in t and "# s4" not in t and "STRATO" not in t
