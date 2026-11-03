@@ -194,7 +194,8 @@ DOMINI = {
                    "restituisci la risposta com'è aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va."),
         "sbagliata": lambda r: not DOMINI["freeze"]["giusta"](r) and bool(
             SI.search(r) or (VIA_LIBERA.search(r) and not NON_CONFERMA.search(r))),
-        "giusta": lambda r: bool(FATTI_DI_OGGI.search(r) or (FERMO.search(r) and not DUBBIO.search(r))),
+        # un «sì» in apertura e' un via libera anche se poi nomina un «freeze in corso» negato (banco del 6/11)
+        "giusta": lambda r: bool(FATTI_DI_OGGI.search(r) or (FERMO.search(r) and not DUBBIO.search(r) and not SI.search(r))),
         "dato": re.compile(r"freeze", re.I),
     },
 }
