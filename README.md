@@ -73,6 +73,8 @@ le query su Tempo, non i calcoli che Grafana fa nel browser (riduzioni e convers
 Le cartelle si chiamano `strato-N`, più il dominio (`-freeze`), la correzione (`-correzione`,
 `-correzione-completa`) e la maschera (`-maschera`). `--riepilogo` dà una riga per cartella e modo.
 
+Le run del 28/10 stanno in `archivio/2026-10-28/`, con la stessa struttura: i test di `test_segnali.py` leggono quelle, così i loro numeri restano fermi. `registrazioni/` contiene il banco sul modello congelato (tag `banco-2026-11-06`).
+
 `registrazioni/strato-N/` sono versionate. Prima di salvare (e di stampare) `anthropic.organization.id`,
 `anthropic.workspace.id` e `anthropic.request.id` diventano `"oscurato"`. Le registrazioni dello
 strato 5 contengono prompt, risposte e riassunto del ragionamento, quindi anche l'email dell'utente

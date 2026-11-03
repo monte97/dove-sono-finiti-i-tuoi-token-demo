@@ -106,7 +106,7 @@ def test_strato_misto_rende_none():
     assert sg.cruscotto([RUN, {**RUN, "strato": 3}])["copia"] is None
 
 
-REG = Path(__file__).parent / "registrazioni"
+REG = Path(__file__).parent / "archivio" / "2026-10-28"  # dati fermi: i numeri dei test vengono da qui
 
 
 def leggi(nome, modo="guasto"):
