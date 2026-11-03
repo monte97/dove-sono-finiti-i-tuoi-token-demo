@@ -1,5 +1,7 @@
 # Cruscotto dei cinque segnali su Grafana e Tempo — piano di implementazione
 
+> Eseguito il 28-29/10/2026: le caselle sono state spuntate il 3/11, dopo averne verificato l'esito sul codice e sui commit.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** I cinque segnali di «Lunedì, in produzione» (D29) su un cruscotto Grafana che legge Tempo con TraceQL, con numeri identici a `segnali.py`; le registrazioni esistenti si rimandano a Tempo per gli screenshot, le run del banco del 6/11 ci arrivano dal vivo.
@@ -8,7 +10,7 @@
 
 **Tech Stack:** Python 3.14, `opentelemetry-sdk==1.44.0`, `opentelemetry-exporter-otlp-proto-http==1.44.0`; `grafana/tempo:2.8.1`, `grafana/grafana:12.0.2` in Docker Compose.
 
-**Spec:** `0_Content/_talks/devfest-alps-2026/observability-agenti-otel-storia.md` (D22, D25, D29, «Lunedì, in produzione»). Lo spike del 29/10 (scratchpad, non versionato) ha misurato quanto segue.
+**Spec:** la storia del talk, fuori da questo repo (D22, D25, D29, «Lunedì, in produzione»). Lo spike del 29/10 (scratchpad, non versionato) ha misurato quanto segue.
 
 ## Global Constraints
 
@@ -42,7 +44,7 @@
 - Consumes: `segnali(r)` e `p95` (esistenti).
 - Produces: `p95(costi: list[float]) -> float` con il metodo di Grafana; `riassunto(r: dict) -> dict[str, str|int|bool]` con le chiavi `richiesta.*` dei Global Constraints, senza le chiavi il cui segnale è `None`.
 
-- [ ] **Step 1: Scrivi i test che falliscono**
+- [x] **Step 1: Scrivi i test che falliscono**
 
 ```python
 def test_p95_come_grafana():
@@ -59,21 +61,21 @@ def test_riassunto_della_run():
 
 e in `test_p95_e_valida_mai_chiamata` sostituisci l'assert su `statistics.quantiles` con quello sopra (stesso valore atteso del nuovo metodo).
 
-- [ ] **Step 2: Esegui e verifica che fallisca**
+- [x] **Step 2: Esegui e verifica che fallisca**
 
 Run: `.venv/bin/python test_segnali.py`
 Expected: FAIL su `test_p95_come_grafana` (AssertionError) o su `riassunto` (AttributeError)
 
-- [ ] **Step 3: Implementa `p95` e `riassunto` in `segnali.py`**
+- [x] **Step 3: Implementa `p95` e `riassunto` in `segnali.py`**
 
 `riassunto` usa `segnali(r)`; `richiamati` = nomi con `chiamate[nome] >= 2`, `sorted`, uniti da spazio.
 
-- [ ] **Step 4: Esegui e verifica che passi**
+- [x] **Step 4: Esegui e verifica che passi**
 
 Run: `.venv/bin/python test_segnali.py && .venv/bin/python test_strati.py && .venv/bin/python segnali.py registrazioni/strato-5`
 Expected: tutti `ok`; lo strato 5 guasto stampa ancora `95° percentile $ 0.002159`
 
-- [ ] **Step 5: Commit** — `git commit -m "Segnali: il riassunto per richiesta e il 95° percentile come lo calcola Grafana"`
+- [x] **Step 5: Commit** — `git commit -m "Segnali: il riassunto per richiesta e il 95° percentile come lo calcola Grafana"`
 
 ### Task 2: il riassunto sulla radice, dal vivo, e l'esportazione OTLP
 
@@ -87,7 +89,7 @@ Expected: tutti `ok`; lo strato 5 guasto stampa ancora `95° percentile $ 0.0021
 - Consumes: `riassunto(r)` (Task 1); `strati.in_dict(span) -> dict`, `strati.fai_provider(maschera)`, la run finta `corri(n)` di `test_strati.py`.
 - Produces: `RiassuntoSullaRadice(strato: int)` in `segnali.py`; globali `strati.PRODUZIONE: bool` (default `False`) e `strati.OTLP: str | None` (default `None`); `fai_provider` aggiunge `RiassuntoSullaRadice(STRATO)` se `PRODUZIONE` e un `BatchSpanProcessor(OTLPSpanExporter(endpoint=OTLP))` se `OTLP`. Da riga di comando `--produzione` (strato 2 o più) e `--otlp URL`, che implica `--produzione`. La cartella delle registrazioni prende il suffisso `-produzione`.
 
-- [ ] **Step 1: Scrivi i test che falliscono**
+- [x] **Step 1: Scrivi i test che falliscono**
 
 ```python
 def test_riassunto_sulla_radice():
@@ -117,21 +119,21 @@ def test_riassunto_due_trace_insieme():
 
 (`trace` è `opentelemetry.trace`). `corri` è l'helper esistente in `test_strati.py`; se ha un'altra firma, adatta la chiamata.
 
-- [ ] **Step 2: Esegui e verifica che fallisca**
+- [x] **Step 2: Esegui e verifica che fallisca**
 
 Run: `.venv/bin/python test_strati.py`
 Expected: FAIL con `AttributeError` su `PRODUZIONE` o su `RiassuntoSullaRadice`
 
-- [ ] **Step 3: Implementa**
+- [x] **Step 3: Implementa**
 
 `on_start`: se lo span non ha un genitore locale, ricordalo come radice della sua trace. `on_end` di un figlio: aggiungi `strati.in_dict(span)` al buffer della trace e scrivi sulla radice `riassunto({"strato": strato, "span": buffer})` con `set_attributes`. `on_end` della radice: libera radice e buffer. Import di `segnali` dentro `fai_provider` (evita l'import circolare).
 
-- [ ] **Step 4: Esegui e verifica che passi**
+- [x] **Step 4: Esegui e verifica che passi**
 
 Run: `.venv/bin/pip install -r requirements.txt && .venv/bin/python test_strati.py && .venv/bin/python test_segnali.py`
 Expected: tutti `ok`
 
-- [ ] **Step 5: Commit** — `git commit -m "In produzione: un SpanProcessor scrive il riassunto della richiesta sulla radice; esportazione OTLP"`
+- [x] **Step 5: Commit** — `git commit -m "In produzione: un SpanProcessor scrive il riassunto della richiesta sulla radice; esportazione OTLP"`
 
 ### Task 3: rimandare le registrazioni a Tempo
 
@@ -143,7 +145,7 @@ Expected: tutti `ok`
 - Consumes: `riassunto(r)` (Task 1).
 - Produces: `in_otlp(r: dict, cartella: str, adesso: float) -> list[ReadableSpan]`; `python tempo.py [--otlp URL] CARTELLA ...` (default `http://localhost:4418/v1/traces`), una richiesta ogni 0,1 s, ognuna spostata così che la sua ultima chiusura cada ad `adesso`.
 
-- [ ] **Step 1: Scrivi i test che falliscono**
+- [x] **Step 1: Scrivi i test che falliscono**
 
 ```python
 def test_in_otlp():
@@ -164,21 +166,21 @@ def test_in_otlp():
 
 Nota: allo strato 1 le chiamate al modello sono trace separate senza radice comune (D22); «radice» è lo span senza genitore, e ce ne sono diverse. Il test prende la prima: è sufficiente per «niente forma».
 
-- [ ] **Step 2: Esegui e verifica che fallisca**
+- [x] **Step 2: Esegui e verifica che fallisca**
 
 Run: `.venv/bin/python test_segnali.py`
 Expected: FAIL con `ModuleNotFoundError: No module named 'tempo'`
 
-- [ ] **Step 3: Implementa `tempo.py`**
+- [x] **Step 3: Implementa `tempo.py`**
 
 Id nuovi con `random.getrandbits` (una mappa per registrazione; una trace nuova per ogni `trace` originale), stato `ERROR` dove `errore`, risorsa `service.name=osservare-a-strati`. Il riassunto si aggiunge solo se la radice non ha già attributi `richiesta.*` (le run del Task 2 li hanno).
 
-- [ ] **Step 4: Esegui e verifica che passi**
+- [x] **Step 4: Esegui e verifica che passi**
 
 Run: `.venv/bin/python test_segnali.py && .venv/bin/python test_strati.py`
 Expected: tutti `ok`
 
-- [ ] **Step 5: Commit** — `git commit -m "tempo.py: le registrazioni rimandate a Tempo, con il riassunto sulla radice"`
+- [x] **Step 5: Commit** — `git commit -m "tempo.py: le registrazioni rimandate a Tempo, con il riassunto sulla radice"`
 
 ### Task 4: lo stack, il cruscotto e la verifica dei numeri
 
@@ -191,30 +193,30 @@ Expected: tutti `ok`
 - Consumes: `cruscotto(regs)` (esistente), `tempo.py` (Task 3).
 - Produces: un cruscotto Grafana «Lunedì, in produzione» (uid `segnali`) con le variabili `cartella` e `modo` (sui metadati `banco.*`) e sei pannelli: richieste; richiamati per strumento (una query per strumento: `{ span.richiesta.richiamati =~ ".*\\bNOME\\b.*" }`); forme dell'albero (`by (span.richiesta.forma)`, tabella col totale); `valida` approva (due query: verdetti e approvati, stat «22 su 30»); da copia vecchia (`{ span.richiesta.copia_vecchia = true }`); costo a richiesta (ricerca con `select(span.richiesta.costo_microusd)`, limite 500, calcoli `median` e `p95`, unità microdollari). `verifica_cruscotto.py CARTELLA` legge le query **dal JSON del cruscotto**, sostituisce le variabili, le esegue su Tempo (passo 60 s, ultima ora, somma dei campioni; il costo dalla ricerca) e confronta ogni numero con `cruscotto()` della stessa cartella, per modo.
 
-- [ ] **Step 1: Configurazione dello stack**
+- [x] **Step 1: Configurazione dello stack**
 
 `tempo.yaml` come nello spike: ricevitore OTLP HTTP su 4318, storage locale, `metrics_generator` con `local-blocks`, `filter_server_spans: false`, `flush_to_storage: true`, e override `processors: [local-blocks]`. Grafana anonimo con ruolo Admin, datasource Tempo uid `tempo`, cruscotto da file.
 
-- [ ] **Step 2: Accendi lo stack e carica i dati**
+- [x] **Step 2: Accendi lo stack e carica i dati**
 
 Run: `docker compose -f cruscotto/compose.yaml up -d && sleep 20 && curl -s localhost:3210/ready && .venv/bin/python tempo.py registrazioni/strato-5 registrazioni/strato-5-freeze registrazioni/strato-5-correzione registrazioni/strato-5-correzione-completa`
 Expected: `ready` e una riga `SUCCESS` per registrazione
 
-- [ ] **Step 3: Scrivi `verifica_cruscotto.py` e lancialo prima del cruscotto**
+- [x] **Step 3: Scrivi `verifica_cruscotto.py` e lancialo prima del cruscotto**
 
 Run: `.venv/bin/python verifica_cruscotto.py registrazioni/strato-5-freeze`
 Expected: FAIL perché `cruscotto/grafana/segnali.json` non esiste o non ha i pannelli
 
-- [ ] **Step 4: Scrivi il cruscotto e rilancia la verifica**
+- [x] **Step 4: Scrivi il cruscotto e rilancia la verifica**
 
 Run: `for c in strato-5 strato-5-freeze strato-5-correzione strato-5-correzione-completa; do .venv/bin/python verifica_cruscotto.py registrazioni/$c || break; done`
 Expected: per ogni cartella e modo, ogni segnale `uguale`; sul freeze guasto: richiamati `leggi_calendario 22 · cerca 8`, approva `22 su 30`, copia `22`, p95 `1486` µ$. Un numero diverso si indaga (superpowers:systematic-debugging), non si aggiusta la query finché torna.
 
-- [ ] **Step 5: Guardalo in Grafana**
+- [x] **Step 5: Guardalo in Grafana**
 
 Apri `http://localhost:3377/d/segnali?var-cartella=strato-5-freeze&var-modo=guasto`: i pannelli mostrano gli stessi numeri della verifica. (Lo screenshot per la slide si fa dopo, a parte.)
 
-- [ ] **Step 6: README e commit**
+- [x] **Step 6: README e commit**
 
 Nel README una sezione «Cruscotto» con i tre comandi (compose, `tempo.py`, `verifica_cruscotto.py`), le porte e il motivo del costo in microdollari e del p95 di Grafana.
 
