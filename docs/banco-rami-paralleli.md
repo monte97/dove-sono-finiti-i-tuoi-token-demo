@@ -82,14 +82,14 @@ Il testo dice, per ogni arco chiamante → chiamato, in quante run compare e qua
 rimpalli: un agente chiamato da due chiamanti nella stessa run, `valida` che richiama una fonte (e se la risposta di
 `avvisi` riporta l'avviso sulla sala B, dallo strato 3), `avvisi` che chiede a `programma` (dialogo) e la guardia dei
 cicli. Il blocco `flowchart LR` si incolla in una slide: gli archi hanno l'etichetta «run/run totali» (`30/30` = in 30
-run su 30) e «×N» se in media l'arco è percorso più volte per run; i rimpalli sono tratteggiati e rossi.
+run su 30) e «×N» se in media l'arco è percorso più volte per run; gli archi tratteggiati (grigi) sono chi controlla o chiede a una fonte fuori dal giro di `coordina` (`valida` che richiama, `avvisi` che chiede a `programma`, arco respinto dalla guardia); in rosso la strada in più `coordina → sale`, quando `sale` è chiamato anche da `programma` nella stessa run (`programma → sale` è la strada normale e resta piena). Il ×N è arrotondato a un decimale.
 
 Esempio dell'uscita Mermaid, su registrazioni finte del server di test (**non sono numeri reali**):
 
 ```mermaid
 flowchart LR
   %% legenda: ogni arco e' «in quante run su quante» (×N = volte per run, in media);
-  %% tratteggiato rosso = rimpallo (stesso dato per due strade, valida che ricontrolla, avvisi che chiede a programma, guardia)
+  %% tratteggiato = chi controlla o chiede a una fonte fuori dal giro di coordina (valida che richiama, avvisi che chiede a programma, arco respinto dalla guardia); rosso = coordina → sale quando sale e' chiamato anche da programma
   utente([utente])
   coordina[coordina]
   programma[programma]
