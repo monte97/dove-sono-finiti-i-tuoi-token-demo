@@ -4,6 +4,7 @@ import io
 import json
 import re
 import tempfile
+import time
 from pathlib import Path
 
 import httpx2 as httpx
@@ -17,6 +18,7 @@ CARTELLA = Path(tempfile.mkdtemp())
 INTESTAZIONI = {"request-id": "req_finto", "anthropic-organization-id": "org-finta", "anthropic-workspace-id": "wrk-finto"}
 VISTE = []  # le intestazioni che il client manda al provider
 CORPI = []  # i corpi delle richieste: istruzioni, messaggi, strumenti
+PAUSA = 0.15  # secondi di attesa del server finto prima di far chiamare lo strumento: rende l'overlap deterministico
 
 
 def risposta_finta(richiesta):
@@ -33,12 +35,11 @@ def risposta_finta(richiesta):
     pensiero = {"type": "thinking", "thinking": "Devo leggere il programma.", "signature": "x"}
     uso = {"input_tokens": 1000, "output_tokens": 50, "cache_read_input_tokens": 0}
     base = {"id": "msg_finto", "type": "message", "role": "assistant", "model": s.MODEL, "usage": uso}
-    precedente = next((b["name"] for b in messaggi[-2]["content"] if b.get("type") == "tool_use"), None) \
-        if len(messaggi) > 1 else None
+    chiesti = {x["name"] for m in messaggi if isinstance(m["content"], list) for x in m["content"] if x.get("type") == "tool_use"}
     risultato = ultimo[-1]["content"] if isinstance(ultimo, list) else None
 
     def chiama(nome, argomenti):
-        contenuto = [pensiero, {"type": "tool_use", "id": f"t{len(messaggi)}", "name": nome, "input": argomenti}]
+        contenuto = [pensiero, {"type": "tool_use", "id": f"t{len(messaggi)}-{nome}", "name": nome, "input": argomenti}]
         return httpx.Response(200, headers=INTESTAZIONI, json={**base, "stop_reason": "tool_use", "content": contenuto})
 
     def rispondi(testo):
@@ -49,15 +50,17 @@ def risposta_finta(richiesta):
         richieste = {"programma": "A che ora è il workshop Kubernetes da zero?",
                      "sale": "In che sala è il workshop Kubernetes da zero?",
                      "avvisi": "Ci sono avvisi sul workshop Kubernetes da zero?"}
-        seguente = {None: "programma", "programma": "sale", "sale": "avvisi", "avvisi": "valida"}
-        if precedente == "valida":
+        if "valida" in chiesti:
             return rispondi(risultato)
-        if seguente[precedente] == "valida":
+        if "programma" in chiesti:
             return chiama("valida", {"domanda": s.DOMANDA, "risposta": "Oggi alle 15:00, sala B.",
                                      "contesto": "Programma: oggi 15:00, sala B."})
-        return chiama(seguente[precedente], {"richiesta": richieste[seguente[precedente]]})
+        contenuto = [pensiero] + [{"type": "tool_use", "id": f"t1-{n}", "name": n, "input": {"richiesta": r}}
+                                  for n, r in richieste.items()]  # i tre insieme, in un solo giro
+        return httpx.Response(200, headers=INTESTAZIONI, json={**base, "stop_reason": "tool_use", "content": contenuto})
     if dati and len(messaggi) == 1:
         argomenti = {c: ("B" if c == "sala" else "Kubernetes da zero") for c in dati["input_schema"].get("required", [])}
+        time.sleep(PAUSA)  # solo nel test: i tre rami si sovrappongono sempre
         return chiama(dati["name"], argomenti)
     if dati:
         return rispondi({"leggi_programma": "Oggi alle 15:00, sala B.", "leggi_sale": "Sala B, primo piano, 80 posti.",
@@ -88,8 +91,8 @@ def attributi(reg, nome):
     return next(x for x in reg["span"] if x["nome"] == nome)["attributi"]
 
 
-# coordina: programma (2 chiamate), sale (2), avvisi (2), valida (1) e le 5 sue, fra strumenti e risposta
-CHIAMATE = 12
+# coordina: 3 giri (i tre agenti insieme, valida, risposta); programma, sale e avvisi 2 ciascuno; valida 1
+CHIAMATE = 10
 AGENTI = ("programma", "sale", "avvisi", "valida")
 
 
@@ -138,7 +141,7 @@ def test_strato_3_gli_strumenti_con_argomenti_e_risultato():
 
 def test_strato_4_ancora_niente_provenienza():
     reg, _ = corri(4)
-    assert nomi(reg) == nomi(corri(3)[0])  # lo strato 4 aggiunge attributi (da fare), non span
+    assert sorted(nomi(reg)) == sorted(nomi(corri(3)[0]))  # (i rami paralleli si chiudono in ordine libero) lo strato 4 aggiunge attributi (da fare), non span
 
 
 def test_strato_5_il_contenuto_e_l_email():
@@ -163,11 +166,66 @@ def test_orchestratore_grafo():
         assert padre_di(reg, f"execute_tool {strumento}") == f"invoke_agent {agente}"
     passaggio = attributi(reg, "execute_tool valida")
     assert passaggio["gen_ai.agent.name"] == "coordina" and passaggio["gen_ai.transfer.mode"] == "return_to_caller"
-    assert s.grafo(reg["span"]) == ["codice>coordina", "coordina>programma", "programma>leggi_programma",
-                                    "coordina>sale", "sale>leggi_sale", "coordina>avvisi", "avvisi>leggi_avvisi",
-                                    "coordina>valida"]
+    # il grafo e' nell'ordine di inizio degli span; i tre rami partono insieme, quindi il loro ordine reciproco non e' fisso
+    passi = s.grafo(reg["span"])
+    assert passi[0] == "codice>coordina" and passi[-1] == "coordina>valida"
+    assert sorted(passi[1:-1]) == sorted(["coordina>programma", "programma>leggi_programma", "coordina>sale",
+                                          "sale>leggi_sale", "coordina>avvisi", "avvisi>leggi_avvisi"])
     m = s.misura(reg)
     assert m["profondita"] == 5 and m["verificato"] and m["esito"] == "sbagliata"
+
+
+def test_i_tre_rami_girano_in_parallelo():
+    reg, _ = corri(3)
+    archi = [x for x in reg["span"] if x["nome"] in ("execute_tool programma", "execute_tool sale", "execute_tool avvisi")]
+    assert len(archi) == 3 and {padre_di(reg, x["nome"]) for x in archi} == {"invoke_agent coordina"}
+    assert len({x["padre"] for x in archi}) == 1  # lo stesso span, non tre omonimi
+    assert max(x["inizio"] for x in archi) < min(x["fine"] for x in archi)  # gli intervalli si sovrappongono tutti
+    assert s.esito(reg)["tracce"] == 1 and len({x["trace"] for x in reg["span"]}) == 1
+    for agente, strumento in (("programma", "leggi_programma"), ("sale", "leggi_sale"), ("avvisi", "leggi_avvisi")):
+        assert padre_di(reg, f"execute_tool {strumento}") == f"invoke_agent {agente}"  # il contesto e' arrivato ai thread
+
+
+def test_risultati_nell_ordine_dei_tool_use():
+    corri(2)
+    giro = next(c for c in CORPI[::-1] if "programma" in {x["name"] for x in c.get("tools", [])}
+                and isinstance(c["messages"][-1]["content"], list) and len(c["messages"][-1]["content"]) == 3)
+    ids = [b["tool_use_id"] for b in giro["messages"][-1]["content"]]
+    assert ids == ["t1-programma", "t1-sale", "t1-avvisi"]
+    # anche se il primo finisce per ultimo, l'ordine non cambia
+    fine = []
+
+    def lento(client, chiamante, nome, id_chiamata, argomenti, stato):
+        time.sleep({"a": 0.15, "b": 0.05, "c": 0.0}[nome])
+        fine.append(nome)
+        return nome.upper(), False
+
+    vero, s.esegui_strumento = s.esegui_strumento, lento
+    try:
+        chiamate = [type("C", (), {"name": n, "id": n, "input": {}})() for n in "abc"]
+        assert s.esegui_chiamate(None, "x", chiamate, {}) == [("A", False), ("B", False), ("C", False)]
+    finally:
+        s.esegui_strumento = vero
+    assert fine == ["c", "b", "a"]
+
+
+def test_eccezione_di_un_ramo_risale():
+    def rotto(client, chiamante, nome, id_chiamata, argomenti, stato):
+        if nome == "b":
+            raise ValueError("ramo b")
+        return nome, False
+
+    vero, s.esegui_strumento = s.esegui_strumento, rotto
+    try:
+        chiamate = [type("C", (), {"name": n, "id": n, "input": {}})() for n in "abc"]
+        try:
+            s.esegui_chiamate(None, "x", chiamate, {})
+        except ValueError as e:
+            assert str(e) == "ramo b"
+        else:
+            raise AssertionError("l'eccezione e' sparita")
+    finally:
+        s.esegui_strumento = vero
 
 
 def test_esito_per_modo():

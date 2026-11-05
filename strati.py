@@ -29,13 +29,16 @@ La pipeline fissa, la variante A (agente come strumento) e il tool runner sono n
 """
 
 import argparse
+import contextvars  # s2
 import datetime as dt
 import json
 import random
 import re
 import statistics
 import textwrap
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import anthropic
@@ -350,21 +353,33 @@ def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti
         return risultato
 
 
+def esegui_chiamate(client, nome: str, chiamate: list, stato: dict) -> list:
+    """Gli strumenti chiesti nello stesso giro girano in parallelo; i risultati tornano nell'ordine dei tool_use."""
+    if len(chiamate) == 1:  # una sola: nessun thread
+        c = chiamate[0]
+        return [esegui_strumento(client, nome, c.name, c.id, c.input, stato)]
+    with ThreadPoolExecutor(max_workers=len(chiamate)) as pool:
+        lavori = []
+        for c in chiamate:
+            ctx = contextvars.copy_context()  # s2  il thread parte dal contesto OpenTelemetry di chi lo lancia
+            lavori.append(pool.submit(ctx.run, esegui_strumento, client, nome, c.name, c.id, c.input, stato))  # s2
+        return [lavoro.result() for lavoro in lavori]  # un'eccezione risale come nel giro sequenziale
+
+
 def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list):
     messaggi = [{"role": "user", "content": richiesta}]
     extra = {"tools": [schemi()[n] for n in strumenti]} if strumenti else {}
     for _ in range(MAX_GIRI):
         r = client.messages.create(model=MODEL, max_tokens=4096, system=istruzioni, messages=messaggi,
                                    thinking=PENSIERO, **extra)
-        stato["fattura"].append(r.usage)  # s0  quello che il provider conta e fattura
+        with stato["lock"]:  # i rami paralleli scrivono qui insieme
+            stato["fattura"].append(r.usage)  # s0  quello che il provider conta e fattura
         chiamate = [b for b in r.content if b.type == "tool_use"]
         if not chiamate:
             return "".join(b.text for b in r.content if b.type == "text")
         messaggi.append({"role": "assistant", "content": r.content})
-        risultati = []
-        for c in chiamate:
-            risultato, errore = esegui_strumento(client, nome, c.name, c.id, c.input, stato)
-            risultati.append({"type": "tool_result", "tool_use_id": c.id, "content": risultato, "is_error": errore})
+        risultati = [{"type": "tool_result", "tool_use_id": c.id, "content": r, "is_error": e}
+                     for c, (r, e) in zip(chiamate, esegui_chiamate(client, nome, chiamate, stato))]
         messaggi.append({"role": "user", "content": risultati})
     raise RuntimeError(f"oltre {MAX_GIRI} giri")
 
@@ -405,7 +420,7 @@ def in_dict(s) -> dict:
 def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     memoria.clear()
     client = client or cliente()
-    stato = {"piena": guasto, "fattura": []}
+    stato = {"piena": guasto, "fattura": [], "lock": threading.Lock()}
     inizio = time.monotonic()  # s0
     with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
