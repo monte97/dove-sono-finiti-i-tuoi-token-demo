@@ -302,19 +302,21 @@ ESITI = ("giusta", "avvisata", "sbagliata")
 # - sbagliata: il resto (15:00 senza avvertimento, o con un avvertimento negato, oppure nessun orario riconoscibile).
 # Limite noto: sono regex su frasi italiane; un giro di parole fuori da questi modi (per esempio «alle tre del
 # pomeriggio») non si riconosce e finisce in sbagliata; un 15:00 superato detto in un modo fuori elenco («il programma
-# parlava delle 15:00») resta un 15:00 dato, quindi avvisata e non giusta (verso conservativo); una negazione
+# parlava delle 15:00») resta un 15:00 dato: mai giusta (verso conservativo), e sbagliata se non c'e' un avvertimento
+# (avvisata se c'e'); una negazione
 # vale solo nella sua clausola (vedi _clausole): «Nessun cambio di sala, ma la sala B chiude» avverte. Nella giornata tranquilla: giusta se c'e' 15:00 e non 14:00.
 _QUINDICI_SUPERATO = re.compile(
     r"\bnon (?:più )?(?:alle|per le|delle|dalle)\s+15:00"
     r"|(?:\binvece\b|anzich[eé]|al posto\b|\brispetto\b|anticipat\w*|spostat\w*|\bchius\w*|\bchiude\b)[^.;!?]{0,30}?15:00"
     r"|15:00 (?:in programma|previst\w*|pubblicat\w*|originari\w*)"
     r"|\bprogramma (?:indicava|diceva|riportava|dava|segnava)\s+(?:le\s+|alle\s+)?15:00"
-    r"|(?:previst[oa]|era)\s+alle\s+15:00\s+nel\s+programma", re.I)
+    r"|(?:previst[oa]|era)\s+alle\s+15:00\s+nel\s+programma"
+    r"|15:00 (?:era|erano)\s+l'orario\s+(?:del|in|nel)\s+programma", re.I)
 # Cosa vale come avvertimento: una causa (chiusura, manutenzione, un'ora prima, anticipo) oppure le 14:00 presentate
 # come possibili o probabili. Una 14:00 nuda non avverte («il 14:00 e' il pranzo»). Una negazione che regge la causa nella
 # stessa clausola la toglie, come in riporta_avviso: «nessun avviso di chiusura», «non risulta che sia chiusa»,
 # «nessuna anticipazione prevista», «non alle 14:00».
-_CAUSA = re.compile(r"chius|chiud|manutenzion|un.ora prima|anticip", re.I)
+_CAUSA = re.compile(r"chius|chiud|manutenzion|un.ora prima|anticip|\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil|indisponibil", re.I)
 _QUATTORDICI_POSSIBILE = re.compile(r"(?:potrebbe|probabilmente|forse|dovrebbe|magari)[^.;!?]{0,30}?14:00", re.I)
 
 
@@ -883,7 +885,11 @@ AVVISI_SALA_B = re.compile(r"sala B", re.I)
 AVVISI_CAUSA = re.compile(r"\bchius[ao]\b|\bchiud\w+|manutenzion|un.ora prima|anticipat|"
                           r"\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil\w*|indisponibil", re.I)
 # una negazione che regge la causa: sta PRIMA e dice che l'avviso o la chiusura non c'e'
-AVVISI_NEGA = re.compile(r"\bnessun\w*|\bnon\s+(?:risult\w+|ci\s+sono|c'è|vi\s+è|vi\s+sono|è\s+previst\w+|"
+# (qui anche «senza», «né» e «non» + fino a tre parole + un verbo che riporta o trova: «non segnalano», «non ho trovato»,
+# «non parlano di», «non indicano»; «non sarà disponibile» resta una causa, non una negazione)
+AVVISI_NEGA = re.compile(r"\bnessun\w*|\bsenza\b|\bné\b|"
+                         r"\bnon\s+(?:\w+\s+){0,3}?(?:segnal|indic|parl|menzion|riport|preved|trov|risult)\w*\s+|"
+                         r"\bnon\s+(?:ci\s+sono|c'è|vi\s+è|vi\s+sono|è\s+previst\w+|"
                          r"sono\s+previst\w+|è|sarà|sono)\s+", re.I)
 
 
