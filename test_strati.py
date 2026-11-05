@@ -13,7 +13,6 @@ import strati as s
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
-s.TIMEOUT_S = 0.01
 CARTELLA = Path(tempfile.mkdtemp())
 INTESTAZIONI = {"request-id": "req_finto", "anthropic-organization-id": "org-finta", "anthropic-workspace-id": "wrk-finto"}
 VISTE = []  # le intestazioni che il client manda al provider
@@ -21,23 +20,22 @@ CORPI = []  # i corpi delle richieste: istruzioni, messaggi, strumenti
 
 
 def risposta_finta(richiesta):
-    """Simula Claude. Con leggi_programma lo chiama finche' non ha un risultato buono; con chiedi_verifica
-    (variante A) poi chiede la verifica passando il risultato; con cerca e valida (variante B) chiama
-    cerca, poi valida, poi risponde. Senza strumenti risponde come valida."""
+    """Simula Claude. coordina chiama programma, sale, avvisi, poi valida, poi risponde; i tre agenti chiamano il
+    loro strumento e rispondono; avvisi non riporta l'avviso sulla sala B (e' lo sbaglio che la demo osserva).
+    Senza strumenti risponde come valida."""
     VISTE.append(dict(richiesta.headers))
     corpo = json.loads(richiesta.content)
     CORPI.append(corpo)
     messaggi = corpo["messages"]
     ultimo = messaggi[-1]["content"]
     strumenti = {x["name"] for x in corpo.get("tools", [])}
-    dati = next((x for x in corpo.get("tools", []) if x["name"] not in ("cerca", "valida")), None)  # lo strumento del dominio
+    dati = next((x for x in corpo.get("tools", []) if x["name"].startswith("leggi_")), None)  # lo strumento dei dati
     pensiero = {"type": "thinking", "thinking": "Devo leggere il programma.", "signature": "x"}
     uso = {"input_tokens": 1000, "output_tokens": 50, "cache_read_input_tokens": 0}
     base = {"id": "msg_finto", "type": "message", "role": "assistant", "model": s.MODEL, "usage": uso}
     precedente = next((b["name"] for b in messaggi[-2]["content"] if b.get("type") == "tool_use"), None) \
         if len(messaggi) > 1 else None
     risultato = ultimo[-1]["content"] if isinstance(ultimo, list) else None
-    buono = isinstance(ultimo, list) and not ultimo[-1].get("is_error")
 
     def chiama(nome, argomenti):
         contenuto = [pensiero, {"type": "tool_use", "id": f"t{len(messaggi)}", "name": nome, "input": argomenti}]
@@ -47,22 +45,23 @@ def risposta_finta(richiesta):
         return httpx.Response(200, headers=INTESTAZIONI,
                               json={**base, "stop_reason": "end_turn", "content": [pensiero, {"type": "text", "text": testo}]})
 
-    domanda = s.DOMINIO["domanda"]  # con l'email: coordina la passa a valida, come nelle run vere
-    if "cerca" in strumenti:  # coordina
-        if precedente is None:
-            return chiama("cerca", {"richiesta": "Kubernetes da zero"})
-        if precedente == "cerca":
-            return chiama("valida", {"domanda": domanda, "risposta": risultato})
-        return rispondi(risultato)
-    if dati and not buono:
-        return chiama(dati["name"], {dati["input_schema"]["required"][0]: next(iter(s.DOMINIO["oggi"]))})
-    if "chiedi_verifica" in strumenti and precedente == "leggi_programma":
-        bozza = f"Oggi alle {json.loads(risultato)['ora']}, sala B."
-        return chiama("chiedi_verifica", {"domanda": domanda, "risposta": bozza, "contesto": risultato})
-    if precedente == "chiedi_verifica":
-        return rispondi(risultato.replace("\n\nVerificato.", ""))
-    if buono:
-        return rispondi(str(json.loads(risultato).get("ora", risultato)))
+    if "programma" in strumenti:  # coordina
+        richieste = {"programma": "A che ora è il workshop Kubernetes da zero?",
+                     "sale": "In che sala è il workshop Kubernetes da zero?",
+                     "avvisi": "Ci sono avvisi sul workshop Kubernetes da zero?"}
+        seguente = {None: "programma", "programma": "sale", "sale": "avvisi", "avvisi": "valida"}
+        if precedente == "valida":
+            return rispondi(risultato)
+        if seguente[precedente] == "valida":
+            return chiama("valida", {"domanda": s.DOMANDA, "risposta": "Oggi alle 15:00, sala B.",
+                                     "contesto": "Programma: oggi 15:00, sala B."})
+        return chiama(seguente[precedente], {"richiesta": richieste[seguente[precedente]]})
+    if dati and len(messaggi) == 1:
+        argomenti = {c: ("B" if c == "sala" else "Kubernetes da zero") for c in dati["input_schema"].get("required", [])}
+        return chiama(dati["name"], argomenti)
+    if dati:
+        return rispondi({"leggi_programma": "Oggi alle 15:00, sala B.", "leggi_sale": "Sala B, primo piano, 80 posti.",
+                         "leggi_avvisi": "Nessun avviso sul workshop."}[dati["name"]])
     return rispondi("Oggi alle 15:00, sala B.\n\nVerificato.")
 
 
@@ -74,15 +73,6 @@ def corri(strato, guasto=True):
         reg = s.esegui(guasto, CARTELLA, client=client)
         s.mostra(reg)
     return reg, re.sub(r"\033\[\d+m", "", fuori.getvalue())  # senza colori
-
-
-@contextlib.contextmanager
-def dominio(nome):
-    s.DOMINIO = s.DOMINI[nome]
-    try:
-        yield
-    finally:
-        s.DOMINIO = s.DOMINI["orario"]
 
 
 def nomi(reg):
@@ -98,8 +88,9 @@ def attributi(reg, nome):
     return next(x for x in reg["span"] if x["nome"] == nome)["attributi"]
 
 
-# coordina chiama cerca; cerca: timeout, ritenta, risponde; coordina chiama valida; valida risponde; coordina risponde
-CHIAMATE = 7
+# coordina: programma (2 chiamate), sale (2), avvisi (2), valida (1) e le 5 sue, fra strumenti e risposta
+CHIAMATE = 12
+AGENTI = ("programma", "sale", "avvisi", "valida")
 
 
 def test_strato_0_solo_log_e_fattura():
@@ -125,25 +116,29 @@ def test_strato_2_una_trace_sola_e_il_grafo():
     reg, _ = corri(2)
     assert s.esito(reg)["tracce"] == 1
     assert nomi(reg)[-1] == "invoke_workflow assistente-evento"
-    assert "execute_tool leggi_programma" not in nomi(reg)  # lo strumento dei dati resta dello strato 3
-    for arco in ("execute_tool cerca", "execute_tool valida"):  # gli archi fra agenti sono dello strato 2
-        a = attributi(reg, arco)
-        assert "gen_ai.tool.call.arguments" not in a and a["gen_ai.transfer.target.name"] == arco.split()[-1]
+    assert not any(n.startswith("execute_tool leggi_") for n in nomi(reg))  # gli strumenti dei dati sono dello strato 3
+    for agente in AGENTI:  # gli archi fra agenti sono dello strato 2
+        a = attributi(reg, f"execute_tool {agente}")
+        assert "gen_ai.tool.call.arguments" not in a and a["gen_ai.transfer.target.name"] == agente
+        assert a["gen_ai.agent.name"] == "coordina"
 
 
-def test_strato_3_lo_strumento_ma_non_la_copia():
-    reg, fuori = corri(3)
-    strumenti = [x for x in reg["span"] if x["nome"] == "execute_tool leggi_programma"]
-    assert [x["errore"] for x in strumenti] == [True, False]
-    assert "15:00" in strumenti[1]["attributi"]["gen_ai.tool.call.result"]
+def test_strato_3_gli_strumenti_con_argomenti_e_risultato():
+    reg, _ = corri(3)
+    for nome in ("leggi_programma", "leggi_sale", "leggi_avvisi"):
+        assert nomi(reg).count(f"execute_tool {nome}") == 1 and not attributi(reg, f"execute_tool {nome}") == {}
+    assert "15:00" in attributi(reg, "execute_tool leggi_programma")["gen_ai.tool.call.result"]
+    assert json.loads(attributi(reg, "execute_tool leggi_sale")["gen_ai.tool.call.result"])["sala"] == "B"
+    assert json.loads(attributi(reg, "execute_tool leggi_programma")["gen_ai.tool.call.arguments"]) == {"sessione": "Kubernetes da zero"}
+    giornata_piena = attributi(reg, "execute_tool leggi_avvisi")["gen_ai.tool.call.result"]  # tutte le pagine, una chiamata
+    assert "Sala B: chiusa dalle 15:00" in giornata_piena and giornata_piena.count("\n") == 399
     assert "gen_ai.tool.call.arguments" in attributi(reg, "execute_tool valida")  # gli argomenti fra agenti sono un prompt
-    assert "cache.read" not in nomi(reg)
+    assert all(not x["errore"] for x in reg["span"])  # nessun componente sbaglia
 
 
-def test_strato_4_la_copia_ha_un_eta():
-    reg, fuori = corri(4)
-    cache = [x for x in reg["span"] if x["nome"] == "cache.read"]
-    assert cache[0]["attributi"]["cache.age_hours"] == 26 and "età 26 ore" in fuori
+def test_strato_4_ancora_niente_provenienza():
+    reg, _ = corri(4)
+    assert nomi(reg) == nomi(corri(3)[0])  # lo strato 4 aggiunge attributi (da fare), non span
 
 
 def test_strato_5_il_contenuto_e_l_email():
@@ -153,97 +148,71 @@ def test_strato_5_il_contenuto_e_l_email():
     assert s.con_email(reg["span"]) > 0 and "email dell'utente" in fuori
 
 
-def test_sana_niente_copia():
-    reg, _ = corri(4, guasto=False)
-    strumenti = [x for x in reg["span"] if x["nome"] == "execute_tool leggi_programma"]
-    assert len(strumenti) == 1 and not strumenti[0]["errore"] and "cache.read" not in nomi(reg)
+def test_tranquilla_tre_pagine():
+    reg, _ = corri(3, guasto=False)
+    assert reg["modo"] == "sana" and reg["fattura"]["chiamate"] == CHIAMATE
+    risultato = attributi(reg, "execute_tool leggi_avvisi")["gen_ai.tool.call.result"]
+    assert risultato.count("\n") == 29 and "Sala B" not in risultato and "sala B" not in risultato
 
 
 def test_orchestratore_grafo():
     reg, _ = corri(5)
-    assert padre_di(reg, "invoke_agent cerca") == "execute_tool cerca"
-    assert padre_di(reg, "invoke_agent valida") == "execute_tool valida"
-    assert padre_di(reg, "execute_tool leggi_programma") == "invoke_agent cerca"
+    for agente in AGENTI:
+        assert padre_di(reg, f"invoke_agent {agente}") == f"execute_tool {agente}"
+    for agente, strumento in (("programma", "leggi_programma"), ("sale", "leggi_sale"), ("avvisi", "leggi_avvisi")):
+        assert padre_di(reg, f"execute_tool {strumento}") == f"invoke_agent {agente}"
     passaggio = attributi(reg, "execute_tool valida")
     assert passaggio["gen_ai.agent.name"] == "coordina" and passaggio["gen_ai.transfer.mode"] == "return_to_caller"
+    assert s.grafo(reg["span"]) == ["codice>coordina", "coordina>programma", "programma>leggi_programma",
+                                    "coordina>sale", "sale>leggi_sale", "coordina>avvisi", "avvisi>leggi_avvisi",
+                                    "coordina>valida"]
     m = s.misura(reg)
-    assert m["grafo"] == ("codice>coordina coordina>cerca cerca>leggi_programma! cerca>leggi_programma "
-                          "coordina>valida")
-    assert m["profondita"] == 6 and m["contesto"] == 0 and m["verificato"]
+    assert m["profondita"] == 5 and m["verificato"] and m["esito"] == "sbagliata"
 
 
-def test_dominio_orario_invariato():
-    reg, _ = corri(5)
-    m = s.misura(reg)
-    assert m["grafo"] == ("codice>coordina coordina>cerca cerca>leggi_programma! cerca>leggi_programma "
-                          "coordina>valida")
-    assert m["esito"] == "sbagliata"
-    assert s.DOMINI["orario"]["sbagliata"]("Oggi alle 15:00, sala B.")
-    assert s.DOMINI["orario"]["giusta"]("Oggi alle 14:00, sala B.")
+def test_esito_per_modo():
+    assert s.sbagliata("Oggi alle 15:00, sala B.", "guasto") and s.giusta("Oggi alle 14:00, sala B.", "guasto")
+    assert not s.giusta("Oggi alle 15:00 (anzi, 14:00).", "guasto") and not s.sbagliata("Alle 14:00.", "guasto")
+    assert s.giusta("Oggi alle 15:00, sala B.", "sana") and s.sbagliata("Oggi alle 14:00, sala B.", "sana")
+    assert not s.giusta("Alle 15:00 o forse alle 14:00.", "sana")
 
 
-def test_freeze_argomento_libero():
-    with dominio("freeze"):
-        stato = {"aperto_fino": 0.0, "guasto": False, "fattura": []}
-        assert s.leggi_dato("servizio pagamenti", stato)["freeze"] is True
+def test_avvisi_deterministici_e_senza_workshop():
+    piena, tranquilla = s.avvisi(True), s.avvisi(False)
+    assert len(piena) == s.PAGINE_PIENA and len(tranquilla) == s.PAGINE_TRANQUILLA
+    assert all(len(p) == s.AVVISI_PER_PAGINA for p in piena + tranquilla)
+    assert piena == s.avvisi(True) and tranquilla == s.avvisi(False)
+    assert s.AVVISO_CHIAVE in piena[s.PAGINA_AVVISO - 1] and sum(s.AVVISO_CHIAVE in p for p in piena) == 1
+    rumore = [v for p in piena for v in p if v != s.AVVISO_CHIAVE]
+    assert len(set(rumore)) == len(rumore)  # vario
+    for v in rumore:  # niente nomina il workshop, un suo orario, o la sala B
+        assert not any(x in v.lower() for x in ("workshop", "kubernetes", "sala b")) and "14:" not in v and "15:" not in v
+    assert any("allarme" in v and "11:00" in v for v in rumore) and any("domani" in v for v in rumore)
+    assert not any("sala b" in v.lower() for p in tranquilla for v in p)
 
 
-def test_freeze_esito():
-    d = s.DOMINI["freeze"]
-    assert d["sbagliata"]("Sì, puoi fare il deploy di pagamenti adesso.")
-    assert d["sbagliata"]("Puoi procedere: pagamenti non è in freeze.")
-    assert d["giusta"]("No, pagamenti è in freeze fino a lunedì 08:00.")
-    assert d["giusta"]("Non puoi fare il deploy: c'è un freeze per il Black Friday.")
-    assert not d["sbagliata"]("Non puoi fare il deploy: c'è un freeze per il Black Friday.")
-    # risposte vere del banco del 28/10, classificate male dalla prima versione
-    sbagliate = ["Sì, al momento non c'è un freeze attivo per il servizio pagamenti, quindi il deploy è possibile.",
-                 "Ciao Marco, sì: il servizio pagamenti non è attualmente in freeze, quindi il deploy è possibile adesso.",
-                 "Sì, Marco: al momento il servizio pagamenti non è in freeze e il calendario non riporta freeze in corso "
-                 "o previsti, quindi puoi procedere con il deploy."]  # dal banco del 6/11
-    non_conferma = ["Al momento non posso confermarti che puoi fare il deploy: il calendario dei freeze non ha risposto.",
-                    "No, al momento non posso confermare che il deploy del servizio pagamenti sia consentito."]
-    assert all(d["sbagliata"](x) and not d["giusta"](x) for x in sbagliate)
-    assert not any(d["sbagliata"](x) or d["giusta"](x) for x in non_conferma)
-    # una risposta giusta e corta, senza date (revisione finale, I1)
-    giuste_corte = ["No, pagamenti è in freeze: non puoi fare il deploy adesso.",
-                    "Non è possibile fare il deploy di pagamenti adesso, è in freeze."]
-    assert all(d["giusta"](x) and not d["sbagliata"](x) for x in giuste_corte)
-    assert not d["sbagliata"]("Non saprei dirti sì o no: il calendario dei freeze non risponde.")
-    with dominio("freeze"):
+def test_correzione_istruzioni_e_filtro_per_sala():
+    try:
+        s.CORREZIONE = 1
         reg, _ = corri(5)
-    m = s.misura({**reg, "risposta": "Non riesco a confermarlo, il calendario non ha risposto."})
-    assert m["esito"] == "non conferma"
-
-
-def test_freeze_grafo():
-    with dominio("freeze"):
+        assert istruzioni_di("su quella sala.") and reg["correzione"] == 1
+        assert s.schemi()["leggi_avvisi"]["input_schema"].get("required") is None
+        assert "Nessun avviso" not in s.leggi_dato("leggi_avvisi", {}, {"piena": True})  # col passo 1 le pagine sono tutte
+        s.CORREZIONE = 2
         reg, _ = corri(5)
-    assert reg["dominio"] == "freeze" and "cerca>leggi_calendario!" in s.misura(reg)["grafo"]
-    assert nomi(reg)[-1] == "invoke_workflow assistente-piattaforma"
-    cache = [x for x in reg["span"] if x["nome"] == "cache.read"]
-    assert cache[0]["attributi"]["cache.age_hours"] == 26
-    assert s.DOMINIO is s.DOMINI["orario"]
+        assert reg["correzione"] == 2 and s.schemi()["leggi_avvisi"]["input_schema"]["required"] == ["sala"]
+        assert istruzioni_di("usa quella indicata nella richiesta.")
+        giornata = attributi(reg, "execute_tool leggi_avvisi")["gen_ai.tool.call.result"]
+        assert giornata == "- " + s.AVVISO_CHIAVE  # solo la sala B, una riga
+        assert s.leggi_dato("leggi_avvisi", {"sala": "b"}, {"piena": False}) == "Nessun avviso."
+        assert s.leggi_dato("leggi_avvisi", {"sala": "A"}, {"piena": True}).startswith("- Sala A:")
+    finally:
+        s.CORREZIONE = 0
 
 
 def istruzioni_di(agente_istruzioni_finiscono):
     return any(isinstance(c.get("system"), str) and c["system"].endswith(agente_istruzioni_finiscono)
                for c in CORPI[-CHIAMATE:])
-
-
-def test_correzione_l_eta_arriva_a_cerca():
-    try:
-        s.CORREZIONE = 1
-        reg, _ = corri(5)
-        strumenti = [x for x in reg["span"] if x["nome"] == "execute_tool leggi_programma"]
-        assert '"aggiornato": "26 ore fa"' in strumenti[1]["attributi"]["gen_ai.tool.call.result"]
-        m = s.misura(reg)
-        assert "avvisa" in m and "valida_sa_eta" in m and reg["correzione"] == 1
-        assert istruzioni_di("dillo nella risposta.") and not istruzioni_di("va confermato.")
-        s.CORREZIONE = 2
-        reg, _ = corri(5)
-        assert istruzioni_di("va confermato.") and reg["correzione"] == 2
-    finally:
-        s.CORREZIONE = 0
 
 
 def test_maschera_email():
@@ -265,13 +234,11 @@ def test_codice_pulito():
         assert not any(x in s.codice(n) for x in ("STRATO", "fai_provider", "MASCHERA")), n
     assert 'modo = "content"' in s.codice(5) and "MascheraEmail(processore)" in s.codice(5)
     assert "MascheraEmail" not in s.codice(1) and '"tracer_provider": provider' in s.codice(1)
-    t = s.codice(4)
-    assert 'start_as_current_span("cache.read")' in t and "cache.age_hours" in t
-    assert "tracer(4)" not in t and "# s4" not in t and "STRATO" not in t
     assert "open_telemetry=" in s.codice(1)
     t = s.codice(3)
     assert 'span.set_attribute("gen_ai.tool.call.arguments"' in t and "if STRATO" not in t
     assert "\nspan.set_attribute(\"gen_ai.tool.call.arguments\"" in t  # il corpo dell'if perde il rientro
+    assert "cache.read" not in open(s.__file__).read()
 
 
 def test_approva_solo_un_verificato_in_fondo():

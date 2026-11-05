@@ -1,17 +1,20 @@
 """La stessa risposta sbagliata, osservata uno strato alla volta.
 
-Tre agenti. `coordina` e' l'orchestratore: ha come strumenti gli agenti `cerca` e `valida` e decide
-lui chi chiamare, in che ordine, cosa passare e quando rispondere. `cerca` legge il programma con lo
-strumento `leggi_programma`, `valida` controlla una risposta prima che arrivi all'utente. Il servizio
-del programma e' simulato e il difetto e' messo apposta: dopo un timeout lo strumento serve per 120 s
-la copia di ieri (15:00 invece di 14:00).
+Cinque agenti. `coordina` e' l'orchestratore: ha come strumenti gli agenti `programma`, `sale`, `avvisi` e
+`valida` e decide lui chi chiamare, in che ordine, cosa passare e quando rispondere. `programma`, `sale` e
+`avvisi` leggono ciascuno una fonte con uno strumento (`leggi_programma`, `leggi_sale`, `leggi_avvisi`),
+`valida` controlla una risposta prima che arrivi all'utente. Nessun componente e' rotto: il programma di
+ieri sera dice 15:00 sala B, e solo un avviso di stamattina sulla sala B dice che la sessione e' un'ora prima.
+
+`--guasto` (modo "guasto" nelle registrazioni) e' la giornata piena: 40 pagine di avvisi, quello sulla sala B a
+meta'. Senza `--guasto` (modo "sana") e' la giornata tranquilla: 3 pagine, niente sulla sala B.
 
 Strati (ognuno contiene i precedenti):
   0  oggi: una riga di log e la fattura, niente OpenTelemetry
   1  l'SDK: la strumentazione nativa di anthropic, nient'altro
   2  gli agenti: span invoke_workflow, invoke_agent e gli archi fra agenti, scritti a mano
-  3  lo strumento: span execute_tool con argomenti, risultato, timeout
-  4  la provenienza: span cache.read con eta' e motivo della copia
+  3  lo strumento: span execute_tool con argomenti e risultato
+  4  i dati letti: da dove viene il dato e quanto
   5  il contenuto: content_mode "content" (messaggi e ragionamento riassunto)
 
   python strati.py --strato 3 --guasto             una run
@@ -28,6 +31,7 @@ La pipeline fissa, la variante A (agente come strumento) e il tool runner sono n
 import argparse
 import datetime as dt
 import json
+import random
 import re
 import statistics
 import textwrap
@@ -46,7 +50,7 @@ QUI = Path(__file__).parent
 load_dotenv(QUI / ".env")
 
 TITOLI = {0: "oggi: un log e una fattura", 1: "l'SDK", 2: "gli agenti", 3: "lo strumento",
-          4: "la provenienza", 5: "il contenuto"}
+          4: "i dati letti", 5: "il contenuto"}
 STRATO = 0
 
 EMAIL = re.compile(r"[\w.]+@[\w.]+\.\w+")
@@ -123,89 +127,126 @@ MODEL = "claude-haiku-5-5"
 LISTINO = (0.10, 0.01, 0.50)  # USD per milione: ingresso, letto dalla cache, uscita (ragionamento compreso); letto il 23/10/2026
 MAX_GIRI = 6
 
-ETA_COPIA_ORE = 26
-TIMEOUT_S = 2.0
-FINESTRA_S = 120
+# Taratura della giornata: la tranquilla e la piena si cambiano da qui.
+PAGINE_PIENA = 40
+PAGINE_TRANQUILLA = 3
+PAGINA_AVVISO = 23  # a che pagina sta l'avviso sulla sala B nella giornata piena
+AVVISI_PER_PAGINA = 10
+SEME_AVVISI = 20261105
 
-# Freeze: la risposta giusta nomina un fatto che c'e' solo nel calendario di oggi; la sbagliata dice si'.
-FATTI_DI_OGGI = re.compile(r"lunedì|black friday|09:12", re.I)
-FERMO = re.compile(r"(?<!non )\bè in freeze|freeze in corso|non puoi|non è (possibile|consentit)", re.I)
-VIA_LIBERA = re.compile(r"(?<!non )\bpuoi\b|(?<!non è )consentit|(?<!non )è possibile|via libera", re.I)
-DUBBIO = re.compile(r"conferm|non (so|saprei)\b", re.I)  # «no, non posso confermare» non e' un no
-SI = re.compile(r"(^|[,:.]\s*)sì\b", re.I)  # un sì che apre la risposta, non «sì o no»
+DOMANDA = ("Ciao, sono Giulia Rossi (giulia.rossi@example.com). "
+           "A che ora è il workshop Kubernetes da zero?")
 
-# Il dominio: domanda, dati di oggi e di ieri, istruzioni degli agenti, strumento. Codice e guasto non cambiano.
-# Istruzioni come le scriverebbe un team: consigliano la verifica, non dicono cosa passare ne' lo vietano.
-DOMINI = {
-    "orario": {
-        "workflow": "assistente-evento", "cartella": "",
-        "domanda": ("Ciao, sono Giulia Rossi (giulia.rossi@example.com). "
-                    "A che ora è il workshop Kubernetes da zero?"),
-        "oggi": {"Kubernetes da zero": {"giorno": "oggi", "ora": "14:00", "sala": "B"},  # spostato stamattina
-                 "OpenTelemetry in un'ora": {"giorno": "oggi", "ora": "11:00", "sala": "A"},
-                 "Rust per chi scrive Go": {"giorno": "domani", "ora": "16:30", "sala": "C"}},
-        "ieri": {"Kubernetes da zero": {"giorno": "oggi", "ora": "15:00", "sala": "B"}},
-        "servizio": "il servizio del programma",
-        "correzione": " Se il dato del programma non è aggiornato, dillo nella risposta.",
-        "strumento": "leggi_programma", "campo": "sessione", "descrizione_campo": "titolo della sessione",
-        "descrizione": "Legge dal servizio del programma giorno, ora e sala di una sessione dell'evento.",
-        "descrizione_cerca": ("Agente che trova informazioni sul programma dell'evento (sessioni, giorni, orari, "
-                              "sale) leggendo il servizio del programma. Restituisce una risposta in una riga."),
-        "cerca": ("Sei l'assistente di DevFest Immaginario 2026. Per gli orari usa sempre lo strumento "
-                  "leggi_programma. Rispondi in una riga con giorno, ora e sala."),
-        "coordina": ("Sei l'assistente di DevFest Immaginario 2026 e coordini due agenti: cerca trova le informazioni "
-                     "sul programma dell'evento, valida controlla una risposta prima che arrivi all'utente. Prima di "
-                     "rispondere all'utente, fai controllare la risposta da valida. Rispondi in una riga con giorno, "
-                     "ora e sala."),
-        "valida": ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino "
-                   "all'utente. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che "
-                   "l'orario sia valido, che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente "
-                   "alla domanda e coerente con il contesto. Se va tutto bene, restituisci la risposta com'è "
-                   "aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va."),
-        "sbagliata": lambda r: "15:00" in r and "14:00" not in r,
-        "giusta": lambda r: "14:00" in r and "15:00" not in r,
-        "dato": re.compile(r"\d\d:\d\d"),  # il dato dello strumento, se arriva a valida
-    },
-    # dal pilota del 25/10 sulla pipeline fissa: stessa domanda, stessi dati, stesse istruzioni
-    "freeze": {
-        "workflow": "assistente-piattaforma", "cartella": "-freeze",
-        "domanda": ("Ciao, sono Marco Bianchi (marco.bianchi@example.com). "
-                    "Posso fare adesso il deploy del servizio pagamenti?"),
-        "oggi": {"pagamenti": {"freeze": True, "dal": "oggi 09:12", "al": "lunedì 08:00", "motivo": "Black Friday"},
-                 "catalogo": {"freeze": False}, "ricerca": {"freeze": False}},
-        "ieri": {"pagamenti": {"freeze": False}},
-        "servizio": "il servizio del calendario",
-        "correzione": " Se il dato del calendario non è aggiornato, dillo nella risposta.",
-        "strumento": "leggi_calendario", "campo": "servizio", "descrizione_campo": "nome del servizio",
-        "descrizione": "Legge dal calendario dei freeze se un servizio si può rilasciare in questo momento.",
-        "descrizione_cerca": ("Agente che trova informazioni sul calendario dei freeze dei servizi leggendo il "
-                              "servizio del calendario. Restituisce una risposta in una riga."),
-        "cerca": ("Sei l'assistente della piattaforma interna di Negozio Immaginario. Per sapere se si può fare il deploy "
-                  "di un servizio usa sempre lo strumento leggi_calendario, che legge il calendario dei freeze. "
-                  "Rispondi in una riga."),
-        "coordina": ("Sei l'assistente della piattaforma interna di Negozio Immaginario e coordini due agenti: cerca "
-                     "trova le informazioni sul calendario dei freeze, valida controlla una risposta prima che arrivi "
-                     "allo sviluppatore. Prima di rispondere allo sviluppatore, fai controllare la risposta da valida. "
-                     "Rispondi in una riga."),
-        "valida": ("Controlli le risposte dell'assistente della piattaforma interna di Negozio Immaginario prima che "
-                   "arrivino allo sviluppatore. Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. "
-                   "Verifica che il servizio esista (i servizi sono pagamenti, catalogo e ricerca), che la risposta dica "
-                   "chiaramente sì o no e che sia pertinente alla domanda e coerente con il contesto. Se va tutto bene, "
-                   "restituisci la risposta com'è aggiungendo in fondo «Verificato.». Altrimenti spiega cosa non va."),
-        "sbagliata": lambda r: not DOMINI["freeze"]["giusta"](r) and bool(
-            SI.search(r) or (VIA_LIBERA.search(r) and not NON_CONFERMA.search(r))),
-        # un «sì» in apertura e' un via libera anche se poi nomina un «freeze in corso» negato (banco del 6/11)
-        "giusta": lambda r: bool(FATTI_DI_OGGI.search(r) or (FERMO.search(r) and not DUBBIO.search(r) and not SI.search(r))),
-        "dato": re.compile(r"freeze", re.I),
-    },
+# Il programma pubblicato ieri sera. Stamattina la sala B e' stata chiusa dalle 15:00 e le sessioni del
+# pomeriggio in sala B iniziano un'ora prima: lo dice solo un avviso, che non nomina il workshop.
+PUBBLICATO = "4/11 alle 18:00"
+PROGRAMMA = {"Kubernetes da zero": {"giorno": "oggi", "ora": "15:00", "sala": "B"},
+             "OpenTelemetry in un'ora": {"giorno": "oggi", "ora": "11:00", "sala": "A"},
+             "Rust per chi scrive Go": {"giorno": "domani", "ora": "16:30", "sala": "C"}}
+SALE = {"A": {"sala": "A", "piano": 0, "capienza": 120},
+        "B": {"sala": "B", "piano": 1, "capienza": 80},
+        "C": {"sala": "C", "piano": 2, "capienza": 60}}
+SESSIONE_SALA = {"Kubernetes da zero": "B", "OpenTelemetry in un'ora": "A", "Rust per chi scrive Go": "C"}
+
+AVVISO_CHIAVE = ("Sala B: chiusa dalle 15:00 per manutenzione dell'impianto elettrico. "
+                 "Le sessioni del pomeriggio in sala B iniziano un'ora prima dell'orario in programma.")
+AVVISO_ALLARME = "Prova dell'allarme antincendio alle 11:00: nessuna evacuazione, il suono dura un minuto."
+_ORE = ["8:30", "9:15", "10:00", "12:30", "13:00", "16:00", "16:45", "17:30", "18:00", "18:30", "19:00"]  # mai le 14 e le 15
+_MODELLI = [
+    ("Guardaroba: ritiro borse fino alle {ora}, al piano {p} accanto all'ingresso {i}.",
+     {"ora": _ORE, "p": ["terra", "primo"], "i": ["nord", "sud", "est"]}),
+    ("Wifi: la rete DevFest-Ospiti cambia chiave alle {ora}, la nuova è stampata sul retro del badge.", {"ora": _ORE}),
+    ("Pranzo: il turno {t} è nell'area ristoro del piano terra, menù {m}.",
+     {"t": ["delle 12:30", "delle 13:00", "delle 13:30"], "m": ["vegetariano", "classico", "senza glutine", "vegano"]}),
+    ("Sponsor: lo stand {s} regala {g} a chi passa entro le {ora}.",
+     {"s": ["Nimbus", "Quadra", "Orbita", "Fulcro", "Vertice", "Sestante"], "g": ["una borraccia", "degli adesivi",
+      "una power bank", "un taccuino", "una maglietta"], "ora": _ORE}),
+    ("Badge: chi ha perso il badge può ritirarne uno nuovo al desk {d}, con un documento.", {"d": ["1", "2", "3", "4"]}),
+    ("Parcheggio: il parcheggio {a} è completo, usare {b}.", {"a": ["nord", "est", "ovest"], "b": ["il parcheggio sud",
+      "l'interrato", "quello di via Verdi", "quello di piazza Mercato"]}),
+    ("Keynote: la keynote {k} è spostata alle {ora} in auditorium.",
+     {"k": ["di apertura", "di chiusura", "sugli open data", "sul software libero"], "ora": ["10:00", "17:30", "18:00"]}),
+    ("Sessione annullata: «{x}», prevista domani, è annullata perché il relatore è bloccato in viaggio.",
+     {"x": ["Introduzione a Zig", "Event sourcing senza dolore", "Il debito tecnico spiegato a tuo cugino",
+            "Design system in tre settimane", "Mobile offline-first"]}),
+    ("Sala A: {c}.", {"c": ["il proiettore è stato sostituito", "distribuite le cuffie per la traduzione",
+                            "le prime due file sono riservate a chi ha bisogno di spazio", "il microfono a mano è sul tavolo"]}),
+    ("Sala C: {c}.", {"c": ["il condizionatore è stato regolato", "ci sono sedie aggiuntive in fondo",
+                            "la lavagna a fogli è stata cambiata", "l'ingresso è dal corridoio est"]}),
+    ("Navetta: la navetta per la stazione parte ogni {n} minuti dal cancello {i}.",
+     {"n": ["10", "15", "20", "30"], "i": ["nord", "sud", "est"]}),
+    ("Oggetti smarriti: trovati {o}, ritirabili al desk {d}.",
+     {"o": ["un caricatore", "un ombrello", "un paio di occhiali", "una felpa grigia", "un quaderno", "delle chiavi"],
+      "d": ["1", "2", "3", "4"]}),
+    ("Community: il tavolo {t} è riservato al gruppo {g} fino alle {ora}.",
+     {"t": ["1", "2", "3", "4", "5"], "g": ["Python", "Rust", "Cloud Native", "Frontend", "Open Source", "Dati"], "ora": _ORE}),
+    ("Foto: il fotografo ufficiale sarà in area ristoro alle {ora}, chi vuole la foto di gruppo passi di lì.", {"ora": _ORE}),
+    ("Accessibilità: l'ascensore {a} è riservato a chi ne ha bisogno, chiedere allo staff in caso di coda.",
+     {"a": ["nord", "sud", "centrale"]}),
+    ("Caffè: la macchina del piano {p} è guasta, usare quella del piano {q}.", {"p": ["terra", "primo"], "q": ["secondo", "terra"]}),
+]
+
+
+def _voce(rng: random.Random) -> str:
+    modello, slot = rng.choice(_MODELLI)
+    return modello.format(**{k: rng.choice(v) for k, v in slot.items()})
+
+
+def avvisi(piena: bool) -> list[list[str]]:
+    """Le comunicazioni di oggi, a pagine. Deterministiche: rumore plausibile, e nella piena l'avviso sulla sala B a metà."""
+    rng, pagine, viste = random.Random(SEME_AVVISI), PAGINE_PIENA if piena else PAGINE_TRANQUILLA, set()
+    voci = [AVVISO_ALLARME]
+    viste.add(AVVISO_ALLARME)
+    while len(voci) < pagine * AVVISI_PER_PAGINA:
+        v = _voce(rng)
+        if v not in viste:
+            viste.add(v)
+            voci.append(v)
+    if piena:
+        voci[(PAGINA_AVVISO - 1) * AVVISI_PER_PAGINA + AVVISI_PER_PAGINA // 2] = AVVISO_CHIAVE
+    return [voci[i:i + AVVISI_PER_PAGINA] for i in range(0, len(voci), AVVISI_PER_PAGINA)]
+
+
+def sbagliata(r: str, modo: str) -> bool:
+    return ("15:00" in r and "14:00" not in r) if modo == "guasto" else ("14:00" in r and "15:00" not in r)
+
+
+def giusta(r: str, modo: str) -> bool:
+    return ("14:00" in r and "15:00" not in r) if modo == "guasto" else ("15:00" in r and "14:00" not in r)
+
+
+# Istruzioni come le scriverebbe un team: dicono cosa fa ciascuno, non come evitare la trappola.
+ISTRUZIONI = {
+    "coordina": ("Sei l'assistente di DevFest Immaginario 2026 e coordini quattro agenti: programma legge il programma "
+                 "pubblicato, sale le informazioni sulle sale, avvisi le comunicazioni di oggi, valida controlla una "
+                 "risposta prima che arrivi all'utente. Per rispondere consulta programma, sale e avvisi; prima di "
+                 "rispondere conviene far controllare la risposta da valida. Rispondi in una riga con giorno, ora e sala."),
+    "programma": ("Sei l'assistente del programma di DevFest Immaginario 2026. Per giorno, ora e sala di una sessione "
+                  "usa sempre lo strumento leggi_programma. Rispondi in una riga."),
+    "sale": ("Sei l'assistente delle sale di DevFest Immaginario 2026. Per sala, piano e capienza usa sempre lo strumento "
+             "leggi_sale. Rispondi in una riga."),
+    "avvisi": ("Sei l'assistente delle comunicazioni di DevFest Immaginario 2026. Gli avvisi di oggi li leggi con lo "
+               "strumento leggi_avvisi. Riporta al massimo tre righe, con gli avvisi più importanti per la richiesta "
+               "che hai ricevuto."),
+    "valida": ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino all'utente. "
+               "Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che l'orario sia valido, "
+               "che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente alla domanda e coerente "
+               "con il contesto. Se va tutto bene, restituisci la risposta com'è aggiungendo in fondo «Verificato.». "
+               "Altrimenti spiega cosa non va."),
 }
-DOMINIO = DOMINI["orario"]
+DESCRIZIONI = {
+    "programma": "Agente che trova giorno, ora e sala di una sessione leggendo il programma pubblicato. Risponde in una riga.",
+    "sale": "Agente che trova sala, piano e capienza di una sessione leggendo il database delle sale. Risponde in una riga.",
+    "avvisi": "Agente che riporta gli avvisi di oggi più importanti per la richiesta, al massimo tre righe.",
+    "valida": ("Agente che controlla una risposta prima che arrivi all'utente. Restituisce la risposta verificata "
+               "oppure cosa non va."),
+}
 
-# La correzione: 1 lo strumento dice quanto e' vecchio il dato e cerca lo deve dire; 2 anche valida sa cosa farne.
-# In B valida risponde a coordina, non all'utente: per questo non le si chiede di rispondere all'utente.
+# La correzione: 1 solo istruzioni a coordina (chiedi gli avvisi della sala dopo averla saputa);
+# 2 in piu' leggi_avvisi vuole la sala e restituisce solo gli avvisi di quella sala.
 CORREZIONE = 0
-CORREZIONE_VALIDA = (" Se la risposta o il contesto dicono che il dato non è aggiornato, non scrivere «Verificato.»: "
-                     "scrivi che il dato va confermato.")
+CORREZIONE_COORDINA = " Quando conosci la sala della sessione, chiedi ad avvisi le comunicazioni su quella sala."
+CORREZIONE_AVVISI = " Lo strumento leggi_avvisi vuole la sala: usa quella indicata nella richiesta."
 
 _VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
              "properties": {"domanda": {"type": "string", "description": "la domanda dell'utente"},
@@ -213,57 +254,61 @@ _VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
                             "contesto": {"type": "string", "description": "informazioni utili alla verifica (facoltativo)"}}}
 
 
+def _un_campo(campo: str, descrizione: str) -> dict:
+    return {"type": "object", "required": [campo], "properties": {campo: {"type": "string", "description": descrizione}}}
+
+
 def schemi() -> dict:
-    d = DOMINIO
+    sala = CORREZIONE >= 2
+    avvisi_tool = {"name": "leggi_avvisi", "input_schema": {"type": "object", "properties": {}},
+                   "description": "Legge tutte le comunicazioni di oggi, tutte le pagine in una sola chiamata."}
+    if sala:
+        avvisi_tool = {"name": "leggi_avvisi", "input_schema": _un_campo("sala", "la sala: A, B o C"),
+                       "description": "Legge le comunicazioni di oggi che riguardano una sala."}
     return {
-        d["strumento"]: {"name": d["strumento"], "description": d["descrizione"],
-                         "input_schema": {"type": "object", "required": [d["campo"]],
-                                          "properties": {d["campo"]: {"type": "string",
-                                                                      "description": d["descrizione_campo"]}}}},
-        "valida": {"name": "valida", "input_schema": _VERIFICA,
-                   "description": "Agente che controlla una risposta prima che arrivi all'utente. Restituisce la "
-                                  "risposta verificata oppure cosa non va."},
-        "cerca": {"name": "cerca", "description": d["descrizione_cerca"],
-                  "input_schema": {"type": "object", "required": ["richiesta"],
-                                   "properties": {"richiesta": {"type": "string", "description": "cosa cercare"}}}},
+        "leggi_programma": {"name": "leggi_programma", "input_schema": _un_campo("sessione", "titolo della sessione"),
+                            "description": "Legge dal programma pubblicato giorno, ora e sala di una sessione."},
+        "leggi_sale": {"name": "leggi_sale", "input_schema": _un_campo("sessione", "titolo della sessione"),
+                       "description": "Legge dal database delle sale sala, piano e capienza di una sessione."},
+        "leggi_avvisi": avvisi_tool,
+        **{n: {"name": n, "description": DESCRIZIONI[n], "input_schema": _un_campo("richiesta", "cosa cercare")}
+           for n in ("programma", "sale", "avvisi")},
+        "valida": {"name": "valida", "input_schema": _VERIFICA, "description": DESCRIZIONI["valida"]},
     }
 
 
 def agenti_strumento() -> dict:
     """strumento -> (agente invocato, sue istruzioni, suoi strumenti)"""
-    return {"valida": ("valida", DOMINIO["valida"] + (CORREZIONE_VALIDA if CORREZIONE >= 2 else ""), []),
-            "cerca": ("cerca", DOMINIO["cerca"] + (DOMINIO["correzione"] if CORREZIONE >= 1 else ""),
-                      [DOMINIO["strumento"]])}
+    return {"programma": ("programma", ISTRUZIONI["programma"], ["leggi_programma"]),
+            "sale": ("sale", ISTRUZIONI["sale"], ["leggi_sale"]),
+            "avvisi": ("avvisi", ISTRUZIONI["avvisi"] + (CORREZIONE_AVVISI if CORREZIONE >= 2 else ""), ["leggi_avvisi"]),
+            "valida": ("valida", ISTRUZIONI["valida"], [])}
+
+
+def istruzioni_coordina() -> str:
+    return ISTRUZIONI["coordina"] + (CORREZIONE_COORDINA if CORREZIONE >= 1 else "")
 
 
 PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del ragionamento torna solo se lo chiedi
 
 
-def servizio(chiave: str, guasto: bool):
-    if guasto:
-        time.sleep(TIMEOUT_S)
-        raise TimeoutError(f"{DOMINIO['servizio']} non ha risposto entro {TIMEOUT_S:g} secondi")
-    time.sleep(0.3)
-    return DOMINIO["oggi"][chiave]
+def _trova(tabella: dict, chiave: str):
+    k = next((k for k in tabella if k.lower() in chiave.lower() or chiave.lower() in k.lower()), None)
+    return k, (tabella[k] if k else {"errore": "non trovato", "disponibili": list(tabella)})
 
 
-def leggi_dato(chiave: str, stato: dict) -> dict:
-    oggi = DOMINIO["oggi"]
-    trovata = next((k for k in oggi if k.lower() in chiave.lower() or chiave.lower() in k.lower()), None)
-    if trovata is None:
-        return {"errore": "non trovato", "disponibili": list(oggi)}
-    if time.monotonic() < stato["aperto_fino"]:
-        with tracer(4).start_as_current_span("cache.read") as span:  # s4
-            span.set_attributes({"cache.hit": True, "cache.age_hours": ETA_COPIA_ORE,  # s4
-                                 "cache.reason": "interruttore aperto dopo un timeout del servizio"})  # s4
-            dato = {**oggi, **DOMINIO["ieri"]}[trovata]
-            # senza correzione l'eta' resta sullo span: il modello non la vede
-            return {**dato, "aggiornato": f"{ETA_COPIA_ORE} ore fa"} if CORREZIONE else dato
-    try:
-        return servizio(trovata, stato["guasto"])
-    except TimeoutError:
-        stato["aperto_fino"] = time.monotonic() + FINESTRA_S
-        raise
+def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
+    """Lo strumento che legge un dato. Niente e' rotto: ognuno risponde correttamente a cio' che gli si chiede."""
+    if nome == "leggi_programma":
+        return json.dumps(_trova(PROGRAMMA, argomenti.get("sessione", ""))[1], ensure_ascii=False)
+    if nome == "leggi_sale":
+        k, dato = _trova(SESSIONE_SALA, argomenti.get("sessione", ""))
+        return json.dumps(SALE[dato] if k else dato, ensure_ascii=False)
+    voci = [v for pagina in avvisi(stato["piena"]) for v in pagina]  # tutte le pagine, in una sola chiamata
+    if CORREZIONE >= 2:
+        sala = argomenti.get("sala", "").strip().upper()
+        voci = [v for v in voci if v.startswith(f"Sala {sala}:")]
+    return "\n".join(f"- {v}" for v in voci) or "Nessun avviso."
 
 
 def esegui_strumento(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict,
@@ -274,14 +319,9 @@ def esegui_strumento(client, chiamante: str, nome: str, id_chiamata: str, argome
         span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": nome,  # s3
                              "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s3
                              "gen_ai.tool.call.arguments": json.dumps(argomenti, ensure_ascii=False)})  # s3
-        try:
-            risultato, errore = json.dumps(leggi_dato(argomenti.get(DOMINIO["campo"], ""), stato), ensure_ascii=False), False
-        except TimeoutError as e:
-            span.set_status(Status(StatusCode.ERROR, str(e)))  # s3
-            span.set_attribute("error.type", "timeout")  # s3
-            risultato, errore = f"Errore: {e}.", True  # l'errore torna al modello: se riprovare lo decide lui
+        risultato = leggi_dato(nome, argomenti, stato)
         span.set_attribute("gen_ai.tool.call.result", risultato)  # s3
-        return risultato, errore
+        return risultato, False
 
 
 def richiesta_di_verifica(argomenti: dict) -> str:
@@ -301,9 +341,9 @@ def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti
                              "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s2
                              "gen_ai.agent.name": chiamante, "gen_ai.transfer.mode": "return_to_caller",  # s2
                              "gen_ai.transfer.target.name": destinazione})  # s2
-        if STRATO >= 3:  # s3  argomenti e risultato, come per leggi_programma
+        if STRATO >= 3:  # s3  argomenti e risultato, come per gli strumenti dei dati
             span.set_attribute("gen_ai.tool.call.arguments", json.dumps(argomenti, ensure_ascii=False))  # s3
-        richiesta = argomenti.get("richiesta", "") if destinazione == "cerca" else richiesta_di_verifica(argomenti)
+        richiesta = richiesta_di_verifica(argomenti) if destinazione == "valida" else argomenti.get("richiesta", "")
         risultato = agente(client, destinazione, istruzioni, richiesta, stato, strumenti)
         if STRATO >= 3:  # s3
             span.set_attribute("gen_ai.tool.call.result", risultato)  # s3
@@ -365,20 +405,20 @@ def in_dict(s) -> dict:
 def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     memoria.clear()
     client = client or cliente()
-    stato = {"aperto_fino": 0.0, "guasto": guasto, "fattura": []}
+    stato = {"piena": guasto, "fattura": []}
     inizio = time.monotonic()  # s0
-    with tracer(2).start_as_current_span(f"invoke_workflow {DOMINIO['workflow']}") as span:  # s2
+    with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
-        span.set_attribute("gen_ai.workflow.name", DOMINIO["workflow"])  # s2
+        span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
         if PRODUZIONE:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
             span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
         # coordina decide chi chiamare, in che ordine e cosa passare
-        risposta = agente(client, "coordina", DOMINIO["coordina"], DOMINIO["domanda"], stato, ["cerca", "valida"])
+        risposta = agente(client, "coordina", istruzioni_coordina(), DOMANDA, stato, ["programma", "sale", "avvisi", "valida"])
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
-    reg = {"strato": STRATO, "dominio": nome_dominio(), "correzione": CORREZIONE, "maschera": MASCHERA, "registrata": ora.isoformat(timespec="seconds"),
-           "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMINIO["domanda"], "risposta": risposta,
+    reg = {"strato": STRATO, "correzione": CORREZIONE, "maschera": MASCHERA, "registrata": ora.isoformat(timespec="seconds"),
+           "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
                        "cache": sum(x.cache_read_input_tokens or 0 for x in u),
@@ -440,7 +480,7 @@ def agente_di(s, per_id):
 def colore(s) -> str:
     if s["errore"]:
         return "rosso"
-    if s["nome"] == "cache.read" or attr(s, "gen_ai.operation.name") == "execute_tool":
+    if attr(s, "gen_ai.operation.name") == "execute_tool":
         return "giallo"
     return "verde" if token(s) else "ciano"
 
@@ -490,9 +530,6 @@ def verbale(span):
             risultato = attr(s, "gen_ai.tool.call.result", attr(s, "anthropic.tool_result.content"))
             if argomenti or risultato:
                 print(c("grigio", f"  {argomenti} -> {risultato}"))
-        elif s["nome"] == "cache.read":
-            print(c("giallo", f"{'  cache.read':<22} {'copia':<11}"))
-            print(c("grigio", f"  età {attr(s, 'cache.age_hours')} ore · {attr(s, 'cache.reason')}"))
     print(f"{'totale dagli span':<22} {'':<11} {'':>20} {totale:>10.6f}")
 
 
@@ -547,17 +584,12 @@ def mostra(reg: dict, registrata: bool = False):
 
 # --- banco e riepilogo ---
 
-def nome_dominio() -> str:
-    return next(n for n, d in DOMINI.items() if d is DOMINIO)
-
-
 def esito(r: dict) -> dict:
     span, f = r["span"], r["fattura"]
     risposta = r["risposta"] or ""
-    dominio = DOMINI[r.get("dominio", "orario")]  # le registrazioni prima del freeze sono tutte sull'orario
     return {"tracce": len(per_trace(span)), "span": len(span), "chiamate": f["chiamate"],
             "strumento": sum(attr(s, "gen_ai.operation.name") == "execute_tool" for s in span),
-            "sbagliata": dominio["sbagliata"](risposta), "verificato": approva(risposta),
+            "sbagliata": sbagliata(risposta, r["modo"]), "verificato": approva(risposta),
             "secondi": r["secondi"], "token": f["in"] + f["out"], "costo": costo(f["in"], f["cache"], f["out"]),
             "email": con_email(span), "attributi": sum(len(s["attributi"]) for s in span)}
 
@@ -597,9 +629,6 @@ def approva(testo: str) -> bool:
 
 NON_CONFERMA = re.compile(r"non (posso|riesco|sono in grado|è possibile|ho potuto)|non confermat|da confermare|"
                           r"conferm\w* (presso|con|all)|ti consiglio di (verificare|controllare)|non disponibile", re.I)
-DICE_TIMEOUT = re.compile(r"timeout|non ha risposto|errore|riprov|non (era )?disponibile|problema", re.I)
-AVVISO = re.compile(r"ieri|vecchi|26 ore|non è aggiornat|non (riesco|posso) (a )?conferm|ricontroll|va confermat", re.I)
-DICE_ETA = re.compile(r"26 ore|\bieri\b|copia|cache|\betà\b", re.I)
 
 
 def grafo(span) -> list[str]:
@@ -625,36 +654,11 @@ def ingresso_di(agente_span, span) -> str:
 
 
 def misura(r: dict) -> dict:
+    """Provvisoria: il grafo e l'esito. Le misure della giornata piena (correttezza, token per agente) sono da riscrivere."""
     span, risposta = r["span"], r["risposta"] or ""
-    passi = grafo(span)
-    dominio = DOMINI[r.get("dominio", "orario")]
-    leggi = [i for i, p in enumerate(passi) if f">{dominio['strumento']}" in p]
-    primo_errore = next((i for i in leggi if passi[i].endswith("!")), None)
-    valide = [s for s in span if attr(s, "gen_ai.operation.name") == "invoke_agent" and attr(s, "gen_ai.agent.name") == "valida"]
-    a_valida = [ingresso_di(s, span) for s in valide]
-    livelli = [lv for _, lv in in_ordine(span)]
-    archi = sorted((s for s in span if attr(s, "gen_ai.transfer.target.name")), key=lambda s: s["inizio"])
-    trasferimenti = [json.loads(attr(s, "gen_ai.tool.call.arguments") or "{}") for s in archi
-                     if attr(s, "gen_ai.transfer.target.name") == "valida"]
-    verdetti = [attr(s, "gen_ai.tool.call.result") or "" for s in archi if attr(s, "gen_ai.transfer.target.name") == "valida"]
-    contesti = [a.get("contesto", "") for a in trasferimenti]
+    passi, livelli = grafo(span), [lv for _, lv in in_ordine(span)]
     return {**esito(r), "grafo": " ".join(passi), "profondita": max(livelli) + 1 if livelli else 0,
-            "riprove": 0 if primo_errore is None else sum(i > primo_errore for i in leggi),
-            "esito": "sbagliata" if dominio["sbagliata"](risposta) else "giusta" if dominio["giusta"](risposta) else
-                     "non conferma" if NON_CONFERMA.search(risposta) else "altro",
-            "non_conferma": bool(NON_CONFERMA.search(risposta)),
-            "valida": len(valide),
-            "contesto": sum(bool(x) for x in contesti),
-            "valida_vede_dato": sum(bool(dominio["dato"].search(x)) for x in contesti),  # il dato nel contesto
-            "valida_vede_timeout": sum(bool(DICE_TIMEOUT.search(x)) for x in a_valida),
-            "valida_vede_eta": sum(bool(DICE_ETA.search(x)) for x in a_valida),
-            "valida_approva": sum(approva(v) for v in verdetti),
-            "email_a_valida": sum(bool(EMAIL.search(x)) for x in a_valida),
-            "avvisa": bool(AVVISO.search(risposta)),
-            # l'eta' negli argomenti dell'arco verso valida (dallo strato 3): il messaggio di valida e' fatto di questi
-            "valida_sa_eta": sum(bool(DICE_ETA.search(json.dumps(a, ensure_ascii=False))) for a in trasferimenti),
-            "cerca_di_nuovo": max(0, sum(attr(s, "gen_ai.transfer.target.name") == "cerca" for s in archi) - 1),
-            "a_valida": a_valida, "argomenti": trasferimenti}
+            "esito": "sbagliata" if sbagliata(risposta, r["modo"]) else "giusta" if giusta(risposta, r["modo"]) else "altro"}
 
 
 def misure(cartelle: list[Path]):
@@ -667,21 +671,11 @@ def misure(cartelle: list[Path]):
             mm = [misura(r) for r in regs if r["modo"] == modo]
             if not mm:
                 continue
-            conta = lambda f: sum(1 for m in mm if f(m))
             med = lambda k: statistics.median(m[k] for m in mm)
-            print(f"{modo}: n {len(mm)} · riprova lo strumento {conta(lambda m: m['riprove'] > 0)} "
-                  f"(riprove dopo il timeout in tutto {sum(m["riprove"] for m in mm)}) · "
-                  + " · ".join(f"{e} {conta(lambda m, e=e: m['esito'] == e)}" for e in ("sbagliata", "giusta", "non conferma", "altro"))
-                  + f" · dice di non poter confermare {conta(lambda m: m['non_conferma'])} · "
-                  f"approvazione {conta(lambda m: m['verificato'])} · avvisa {conta(lambda m: m['avvisa'])}")
-            print(f"  valida chiamata: in {conta(lambda m: m['valida'] > 0)} run, {sum(m['valida'] for m in mm)} volte · "
-                  f"con contesto {sum(m['contesto'] for m in mm)} · le arriva il dato dello strumento {sum(m['valida_vede_dato'] for m in mm)} · "
-                  f"il timeout {sum(m['valida_vede_timeout'] for m in mm)} · l'età {sum(m['valida_vede_eta'] for m in mm)} "
-                  f"(anche negli argomenti {sum(m['valida_sa_eta'] for m in mm)}) · "
-                  f"l'email {sum(m['email_a_valida'] for m in mm)} · valida approva {sum(m['valida_approva'] for m in mm)} · "
-                  f"cerca richiamata {sum(m['cerca_di_nuovo'] for m in mm)}")
-            print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello {med('chiamate'):.0f} · "
-                  f"token {med('token'):.0f} · secondi {med('secondi'):.1f} · $ {med('costo'):.6f}")
+            print(f"{modo}: n {len(mm)} · " + " · ".join(
+                f"{e} {sum(1 for m in mm if m['esito'] == e)}" for e in ("sbagliata", "giusta", "altro")))
+            print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello "
+                  f"{med('chiamate'):.0f} · token {med('token'):.0f} · secondi {med('secondi'):.1f} · $ {med('costo'):.6f}")
             grafi = {}
             for m in mm:
                 grafi[m["grafo"]] = grafi.get(m["grafo"], 0) + 1
@@ -727,9 +721,8 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--strato", type=int, choices=range(6), default=0)
     p.add_argument("--guasto", action="store_true")
-    p.add_argument("--dominio", choices=list(DOMINI), default="orario")
-    p.add_argument("--correzione", action="store_true", help="lo strumento dice quanto e' vecchio il dato")
-    p.add_argument("--correzione-completa", action="store_true", help="...e valida sa cosa farne")
+    p.add_argument("--correzione", action="store_true", help="coordina chiede ad avvisi la sala della sessione")
+    p.add_argument("--correzione-completa", action="store_true", help="...e leggi_avvisi restituisce solo gli avvisi di quella sala")
     p.add_argument("--maschera", action="store_true", help="solo con --strato 5: l'email non esce dagli span")
     p.add_argument("--produzione", action="store_true", help="dallo strato 2: il riassunto della richiesta sulla radice")
     p.add_argument("--otlp", metavar="URL", help="esporta gli span via OTLP HTTP (implica --produzione)")
@@ -756,11 +749,11 @@ if __name__ == "__main__":
         PRODUZIONE, OTLP = a.produzione or bool(a.otlp), a.otlp
         if PRODUZIONE and a.strato < 2:
             raise SystemExit("--produzione serve dallo strato 2, dove c'e' la radice della richiesta")
-        STRATO, DOMINIO, MASCHERA = a.strato, DOMINI[a.dominio], a.maschera
+        STRATO, MASCHERA = a.strato, a.maschera
         CORREZIONE = 2 if a.correzione_completa else 1 if a.correzione else 0
-        a.guasto = a.guasto or CORREZIONE > 0  # la correzione ha senso solo con il guasto
+        a.guasto = a.guasto or CORREZIONE > 0  # la correzione ha senso solo nella giornata piena
         coda = ["", "-correzione", "-correzione-completa"][CORREZIONE] + ("-maschera" if MASCHERA else "") + ("-produzione" if PRODUZIONE else "")
-        cartella = QUI / "registrazioni" / f"strato-{a.strato}{DOMINIO['cartella']}{coda}"
+        cartella = QUI / "registrazioni" / f"strato-{a.strato}{coda}"
         if a.banco:
             banco([esegui(a.guasto, cartella) for _ in range(a.banco)])
         else:
