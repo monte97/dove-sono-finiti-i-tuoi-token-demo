@@ -86,9 +86,10 @@ caso.
 .venv/bin/python segnali.py registrazioni/strato-5 registrazioni/strato-5-correzione   # i segnali, dai soli span
 ```
 
-`segnali.py` calcola i segnali di «Lunedì, in produzione» leggendo solo gli span, come farebbe un backend: la
-forma dell'albero, il costo per richiesta alla mediana e al 95° percentile, la quota di `avvisi` sui token, le
-pagine di avvisi lette, quanto spesso `valida` approva.
+`segnali.py` calcola i segnali di «Lunedì, in produzione» leggendo solo gli span, come farebbe un backend: la forma
+dell'albero, il costo per richiesta alla mediana e al 95° percentile, la quota di `avvisi` sui token, le pagine di
+avvisi lette nel ramo di `coordina` (i ricontrolli sono contati a parte, `pagine_ricontrolli`), quanto spesso `valida`
+approva.
 
 ## Lo schema del sistema
 

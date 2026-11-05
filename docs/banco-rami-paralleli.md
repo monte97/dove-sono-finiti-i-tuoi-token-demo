@@ -1,7 +1,9 @@
 # Banco: i numeri della giornata piena
 
-Scheletro della tabella dei numeri del talk. I valori sono `[banco]` finché il banco non è stato rifatto sul
-sistema nuovo (cinque agenti, rami paralleli). `registrazioni/` parte vuota: il banco del sistema precedente sta in
+I valori vengono dal banco del 5/11 (tag `banco-2026-11-05`, 330 run, 2,21 $). Il banco è dentro le soglie della storia
+di `controllo.py`: 0 giuste e 22 sbagliate su 30 nella giornata piena, 30 giuste su 30 nella tranquilla.
+
+Tabella dei numeri del talk, sul sistema nuovo (cinque agenti, rami paralleli). Il banco del sistema precedente sta in
 `archivio/banco-2026-11-06/` (e nel tag `banco-2026-11-06`), fuori da `--riepilogo`, `--misure` e `segnali.py`.
 
 ## Rifare il banco
@@ -19,33 +21,33 @@ for N in 0 1 2 3 4 5; do
 done
 ```
 
-Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione`, `strato-N-correzione-completa` e `strato-N-correzione-dialogo`;
-`sana` e `guasto` stanno nella stessa cartella e si distinguono dal campo `modo`.
+Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione`, `strato-N-correzione-completa` e
+`strato-N-correzione-dialogo`; `sana` e `guasto` stanno nella stessa cartella e si distinguono dal campo `modo`.
 
 ## La tabella
 
 | Numero | Valore | Comando che lo riproduce |
 |---|---|---|
-| Durata e costo, guasta contro sana, strato 0 | `[banco]` | `.venv/bin/python strati.py --riepilogo` (righe `strato-0 guasto` e `strato-0 sana`: colonne `sec med` e `$ med`) |
-| Token per richiesta (strato 5, guasta) | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `mediane`: `token`) |
-| Quota di `avvisi` sui token della richiesta | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `quota di avvisi sui token`); per mediana e 95° percentile `.venv/bin/python segnali.py registrazioni/strato-5` |
-| Costo per agente | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `costo per agente, $ (mediana)`: costo a `LISTINO` delle chiamate al modello di ogni agente) |
-| Quota delle riletture | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `quota delle riletture`). Definizione: in ogni `invoke_agent`, ogni chiamata dopo la prima rilegge la conversazione fin lì; si sommano i token in ingresso della chiamata precedente, e si divide per i token in ingresso di tutta la richiesta |
-| Esiti su 30, guasta: giusta / avvisata / sbagliata | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `guasto: n 30 · giusta ... · avvisata ... · sbagliata ...`) |
-| Esiti su 30, sana: giusta / sbagliata | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `sana: n 30 · giusta ... · avvisata 0 · sbagliata ...`) |
-| Run in cui `avvisi` omette l'avviso | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `leggi_avvisi ha restituito l'avviso sulla sala B` contro `avvisi lo riporta a coordina`) |
-| Verdetti di `valida` | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `valida approva`); `.venv/bin/python segnali.py registrazioni/strato-5` |
-| Run con i tre rami nello stesso giro | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `programma, sale, avvisi nello stesso giro`) |
-| Forme dell'albero | `[banco]` | `.venv/bin/python strati.py --misure 5` (elenco `forme dell'albero`); `.venv/bin/python segnali.py registrazioni/strato-5` |
-| Correzione, passo 1: correttezza e costo | `[banco]` | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione` |
-| Correzione completa, passo 2: correttezza e costo | `[banco]` | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione-completa`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione-completa` |
-| Correzione dialogo: correttezza e costo | `[banco]` | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione-dialogo`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione-dialogo`. È un'alternativa alle altre due (non le include): `avvisi` ha anche l'agente `programma` come strumento |
-| Run in cui `avvisi` chiede a `programma`, e poi riporta l'avviso (solo dialogo) | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `avvisi chiede a programma` e `...e poi avvisi riporta l'avviso`, solo nella cartella `-correzione-dialogo`) |
-| Run in cui `sale` è chiamato da due chiamanti (`coordina` e `programma`) | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `sale chiamato da due chiamanti diversi`) |
-| Run in cui `valida` ricontrolla con `avvisi`, e se la risposta riporta l'avviso | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `valida richiede ad avvisi` e `...e la risposta di avvisi riporta l'avviso`) |
-| Run in cui `valida` ricontrolla con `programma` | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `valida richiede a programma`) |
-| Profondità massima dell'albero e numero di span | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `massimi: profondità ... span ...` e `mediane: profondità ... · span ...`) |
-| Volte in cui la guardia contro i cicli ha rifiutato una chiamata | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `guardia dei cicli scattata`) |
+| Durata e costo, guasta contro sana, strato 0 | guasta 18,7 s e 0,0059 $; sana 20,0 s e 0,0028 $ (mediane) | `.venv/bin/python strati.py --riepilogo` (righe `strato-0 guasto` e `strato-0 sana`: colonne `sec med` e `$ med`) |
+| Token per richiesta (strato 5, guasta) | 50.806 (mediana) | `.venv/bin/python strati.py --misure 5` (riga `mediane`: `token`) |
+| Quota di `avvisi` sui token della richiesta | 64% (95° percentile 70%) nella guasta; 22% (95° percentile 26%) nella sana | `.venv/bin/python strati.py --misure 5` (riga `quota di avvisi sui token`); per mediana e 95° percentile `.venv/bin/python segnali.py registrazioni/strato-5` |
+| Costo per agente | guasta, mediana in $: `avvisi` 0,003760, `coordina` 0,000720, `programma` 0,000741, `sale` 0,000442, `valida` 0,000358 | `.venv/bin/python strati.py --misure 5` (riga `costo per agente, $ (mediana)`: costo a `LISTINO` delle chiamate al modello di ogni agente) |
+| Quota delle riletture | 20% nella guasta; 47% nella sana (mediana) | `.venv/bin/python strati.py --misure 5` (riga `quota delle riletture`). Definizione: in ogni `invoke_agent`, ogni chiamata dopo la prima rilegge la conversazione fin lì; si sommano i token in ingresso della chiamata precedente, e si divide per i token in ingresso di tutta la richiesta |
+| Esiti su 30, guasta: giusta / avvisata / sbagliata | 0 / 8 / 22 | `.venv/bin/python strati.py --misure 5` (riga `guasto: n 30 · giusta ... · avvisata ... · sbagliata ...`) |
+| Esiti su 30, sana: giusta / sbagliata | 30 / 0 | `.venv/bin/python strati.py --misure 5` (riga `sana: n 30 · giusta ... · avvisata 0 · sbagliata ...`) |
+| Run in cui `avvisi` omette l'avviso | 23 su 30 (`leggi_avvisi` restituisce l'avviso in 30, `avvisi` lo riporta a `coordina` in 7) | `.venv/bin/python strati.py --misure 5` (righe `leggi_avvisi ha restituito l'avviso sulla sala B` contro `avvisi lo riporta a coordina`) |
+| Verdetti di `valida` | approva 22 su 30 nella guasta, 30 su 30 nella sana | `.venv/bin/python strati.py --misure 5` (riga `valida approva`); `.venv/bin/python segnali.py registrazioni/strato-5` |
+| Run con i tre rami nello stesso giro | 6 su 30 nella guasta, 6 su 30 nella sana | `.venv/bin/python strati.py --misure 5` (riga `programma, sale, avvisi nello stesso giro`) |
+| Forme dell'albero | 17 forme nella guasta (la più frequente in 3 run), 15 nella sana (la più frequente in 8 run) | `.venv/bin/python strati.py --misure 5` (elenco `forme dell'albero`); `.venv/bin/python segnali.py registrazioni/strato-5` |
+| Correzione, passo 1: correttezza e costo | 30 run: 5 giuste, 25 avvisate, 0 sbagliate; mediana 0,008392 $ (95° percentile 0,010489 $) | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione` |
+| Correzione completa, passo 2: correttezza e costo | 30 run: 2 giuste, 28 avvisate, 0 sbagliate; mediana 0,003908 $ (95° percentile 0,004990 $) | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione-completa`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione-completa` |
+| Correzione dialogo: correttezza e costo | 30 run: 2 giuste, 28 avvisate, 0 sbagliate; mediana 0,009160 $ (95° percentile 0,010745 $) | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione-dialogo`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione-dialogo`. È un'alternativa alle altre due (non le include): `avvisi` ha anche l'agente `programma` come strumento |
+| Run in cui `avvisi` chiede a `programma`, e poi riporta l'avviso (solo dialogo) | `avvisi` chiede a `programma` in 30 su 30 e poi riporta l'avviso in 30 su 30 | `.venv/bin/python strati.py --misure 5` (righe `avvisi chiede a programma` e `...e poi avvisi riporta l'avviso`, solo nella cartella `-correzione-dialogo`) |
+| Run in cui `sale` è chiamato da due chiamanti (`coordina` e `programma`) | 10 su 30 nella guasta, 6 su 30 nella sana | `.venv/bin/python strati.py --misure 5` (riga `sale chiamato da due chiamanti diversi`) |
+| Run in cui `valida` ricontrolla con `avvisi`, e se la risposta riporta l'avviso | 19 su 30 nella guasta, e la risposta riporta l'avviso in 7; 22 su 30 nella sana, mai l'avviso | `.venv/bin/python strati.py --misure 5` (righe `valida richiede ad avvisi` e `...e la risposta di avvisi riporta l'avviso`) |
+| Run in cui `valida` ricontrolla con `programma` | 19 su 30 nella guasta, 25 su 30 nella sana | `.venv/bin/python strati.py --misure 5` (riga `valida richiede a programma`) |
+| Profondità massima dell'albero e numero di span | profondità 9 (mediana 9); span massimo 53 (mediana 45) nella guasta | `.venv/bin/python strati.py --misure 5` (righe `massimi: profondità ... span ...` e `mediane: profondità ... · span ...`) |
+| Volte in cui la guardia contro i cicli ha rifiutato una chiamata | 0 su 30 run, 0 volte (guardia mai scattata) | `.venv/bin/python strati.py --misure 5` (riga `guardia dei cicli scattata`) |
 
 `--misure 5` stampa insieme `strato-5`, `strato-5-correzione`, `strato-5-correzione-completa` e
 `strato-5-correzione-dialogo`, ognuna con le giornate `guasto` e `sana` che contiene.
@@ -63,10 +65,11 @@ strumento gli restituisce l'errore («<agente> è già nella catena di chiamata 
 ed `error.type = ciclo`: è un errore vero del modello, non il meccanismo del guasto.
 
 Con le chiamate annidate una run allo strato 5 ha più span: sul server finto, con `programma>sale` e i due ricontrolli
-di `valida`, sono 44 contro 23 senza (oltre i 40 indicativi). Pagine di avvisi: `pagine_avvisi` (riga `pagine di avvisi lette da coordina`, `richiesta.pagine_avvisi`
-nel cruscotto, `segnali.py`) conta solo le pagine lette da `leggi_avvisi` sotto l'arco di `avvisi` chiamato da `coordina`:
-è il numero della slide, 40 nella giornata piena. `pagine_ricontrolli` (riga `pagine di avvisi nei ricontrolli`) conta le
-letture sotto qualunque altro chiamante: i ricontrolli di `valida` e il dialogo.
+di `valida`, sono 44 contro 23 senza (oltre i 40 indicativi). Pagine di avvisi: `pagine_avvisi` (riga `pagine di
+avvisi lette da coordina`, `richiesta.pagine_avvisi` nel cruscotto, `segnali.py`) conta solo le pagine lette da
+`leggi_avvisi` sotto l'arco di `avvisi` chiamato da `coordina`: è il numero della slide, 40 nella giornata piena.
+`pagine_ricontrolli` (riga `pagine di avvisi nei ricontrolli`) conta le letture sotto qualunque altro chiamante: i
+ricontrolli di `valida` e il dialogo.
 
 ## Lo schema del sistema
 
@@ -82,7 +85,10 @@ Il testo dice, per ogni arco chiamante → chiamato, in quante run compare e qua
 rimpalli: un agente chiamato da due chiamanti nella stessa run, `valida` che richiama una fonte (e se la risposta di
 `avvisi` riporta l'avviso sulla sala B, dallo strato 3), `avvisi` che chiede a `programma` (dialogo) e la guardia dei
 cicli. Il blocco `flowchart LR` si incolla in una slide: gli archi hanno l'etichetta «run/run totali» (`30/30` = in 30
-run su 30) e «×N» se in media l'arco è percorso più volte per run; gli archi tratteggiati (grigi) sono chi controlla o chiede a una fonte fuori dal giro di `coordina` (`valida` che richiama, `avvisi` che chiede a `programma`, arco respinto dalla guardia); in rosso la strada in più `coordina → sale`, quando `sale` è chiamato anche da `programma` nella stessa run (`programma → sale` è la strada normale e resta piena). Il ×N è arrotondato a un decimale.
+run su 30) e «×N» se in media l'arco è percorso più volte per run; gli archi tratteggiati (grigi) sono chi controlla o
+chiede a una fonte fuori dal giro di `coordina` (`valida` che richiama, `avvisi` che chiede a `programma`, arco
+respinto dalla guardia); in rosso la strada in più `coordina → sale`, quando `sale` è chiamato anche da `programma`
+nella stessa run (`programma → sale` è la strada normale e resta piena). Il ×N è arrotondato a un decimale.
 
 Esempio dell'uscita Mermaid, su registrazioni finte del server di test (**non sono numeri reali**):
 
