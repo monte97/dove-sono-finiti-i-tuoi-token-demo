@@ -838,6 +838,32 @@ def token_per_agente(span) -> dict:
     return fuori
 
 
+def costo_per_agente(span) -> dict:
+    """Costo in $ (a LISTINO) delle chiamate al modello, per agente che le ha fatte."""
+    per_id, fuori = {x["id"]: x for x in span}, {}
+    for x in span:
+        if t := token(x):
+            nome = agente_di(x, per_id)
+            fuori[nome] = fuori.get(nome, 0) + costo(t["in"], t["cache"], t["out"])
+    return fuori
+
+
+def quota_riletture(span) -> float | None:
+    """Quota dei token in ingresso che il modello rilegge. In ogni invoke_agent, ogni chiamata dopo la prima rilegge
+    la conversazione fin li': conta i token in ingresso della chiamata precedente dello stesso invoke_agent. La quota
+    e' la somma di questi sulla somma dei token in ingresso di tutte le chiamate (None se non ci sono token)."""
+    per_id, per_invoke = {x["id"]: x for x in span}, {}
+    for x in span:
+        if token(x):
+            y = x
+            while y and attr(y, "gen_ai.operation.name") != "invoke_agent":
+                y = per_id.get(y["padre"])
+            per_invoke.setdefault(y["id"] if y else None, []).append(x)
+    totale = sum(token(x)["in"] for xs in per_invoke.values() for x in xs)
+    riletti = sum(token(a)["in"] for xs in per_invoke.values() for a, _ in zip(sorted(xs, key=lambda x: x["inizio"]), xs[1:]))
+    return riletti / totale if totale else None
+
+
 def quota_avvisi(span) -> float | None:
     """Che parte dei token della richiesta e' spesa dall'agente avvisi (None se non ci sono token)."""
     per_agente = token_per_agente(span)
@@ -865,7 +891,9 @@ def misura(r: dict) -> dict:
             "email_a_valida": se("email_valida", lambda: any(EMAIL.search(attr(x, "gen_ai.tool.call.arguments", ""))
                                                              for x in archi(span, ("valida",)))),
             "token_agente": se("token", lambda: token_per_agente(span)),
-            "quota_avvisi": se("token", lambda: quota_avvisi(span))}
+            "quota_avvisi": se("token", lambda: quota_avvisi(span)),
+            "costo_agente": se("token", lambda: costo_per_agente(span)),
+            "riletture": se("token", lambda: quota_riletture(span))}
 
 
 def misure(cartelle: list[Path]):
@@ -909,7 +937,10 @@ def misure(cartelle: list[Path]):
                 agenti = sorted({a for m in mm for a in m["token_agente"]})
                 print(f"  {'token per agente (mediana)':<52} " + " · ".join(
                     f"{a} {statistics.median(m['token_agente'].get(a, 0) for m in mm):.0f}" for a in agenti))
+                print(f"  {'costo per agente, $ (mediana)':<52} " + " · ".join(
+                    f"{a} {statistics.median(m['costo_agente'].get(a, 0) for m in mm):.6f}" for a in agenti))
                 print(f"  {'quota di avvisi sui token della richiesta':<52} mediana {med('quota_avvisi'):.0%}")
+                print(f"  {'quota delle riletture (token in ingresso)':<52} mediana {med('riletture'):.0%}")
             print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello "
                   f"{med('chiamate'):.0f} · token {med('token'):.0f} · secondi {med('secondi'):.1f} · $ {med('costo'):.6f}")
             grafi = {}

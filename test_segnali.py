@@ -317,6 +317,20 @@ def test_log_in_otlp_usa_l_orario_registrato():
     assert abs(ora["d"] - ((x["inizio"] + sposta) * 1e9 + 3_000_000)) < 1e3  # senza orario: l'inizio piu' un ms per posto
 
 
+def test_costo_per_agente_e_riletture():
+    reg = run()
+    reg["span"] += [chat("m-avvisi-2", "g-avvisi", 5.0, 9000, 0, 100), chat("m-co-2", "co", 6.0, 1500, 500, 20)]
+    assert round(s.costo_per_agente(reg["span"])["avvisi"] * 1e6) == round(s.costo(8000, 0, 100) * 1e6 + s.costo(9000, 0, 100) * 1e6)
+    assert round(s.costo_per_agente(reg["span"])["coordina"] * 1e6) == round((s.costo(1000, 0, 50) + s.costo(1500, 500, 20)) * 1e6)
+    # riletti: avvisi rilegge gli 8000 della prima chiamata, coordina i 1000 della sua; ingresso totale = 14000 + 9000 + 1500
+    assert s.quota_riletture(reg["span"]) == (8000 + 1000) / (1000 + 1000 + 1000 + 8000 + 2000 + 9000 + 1500)
+    assert s.quota_riletture([x for x in run()["span"]]) == 0  # una chiamata per invoke_agent: niente da rileggere
+    assert s.quota_riletture([]) is None
+    m = s.misura(reg)
+    assert m["riletture"] == s.quota_riletture(reg["span"]) and set(m["costo_agente"]) >= {"coordina", "avvisi", "valida"}
+    assert s.misura({**reg, "strato": 1})["riletture"] is None and s.misura({**reg, "strato": 1})["costo_agente"] is None
+
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):

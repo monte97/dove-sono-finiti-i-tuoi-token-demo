@@ -70,10 +70,10 @@ python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python strati.py --replay registrazioni/strato-N/<file>.json    # una registrazione
 ```
 
-Le registrazioni nel formato di questa versione (con il campo `log_otel`) escono dal banco qui sotto. Le
-cartelle che oggi stanno in `registrazioni/` sono quelle del sistema precedente e le misure nuove non le
-leggono. Finché il banco non è stato rifatto, i numeri di questa versione non esistono: le righe della tabella
-in `docs/banco-rami-paralleli.md` sono segnate `[banco]`.
+Le registrazioni di questa versione (con il campo `log_otel`) escono dal banco qui sotto e finiscono in
+`registrazioni/`, che parte vuota. Il banco del sistema precedente sta in `archivio/banco-2026-11-06/`, fuori
+da `--riepilogo`, `--misure` e `segnali.py`. Finché il banco non è stato rifatto, i numeri di questa versione
+non esistono: le righe della tabella in `docs/banco-rami-paralleli.md` sono segnate `[banco]`.
 
 ## Le misure
 
@@ -82,7 +82,7 @@ caso.
 
 ```bash
 .venv/bin/python strati.py --riepilogo        # una riga per cartella e modo: risposte sbagliate, tempi, token, costo
-.venv/bin/python strati.py --misure 5         # rami nello stesso giro, cosa riporta avvisi, verdetti di valida, token per agente
+.venv/bin/python strati.py --misure 5         # rami nello stesso giro, cosa riporta avvisi, verdetti di valida, token e costo per agente, quota delle riletture
 .venv/bin/python segnali.py registrazioni/strato-5 registrazioni/strato-5-correzione   # i segnali, dai soli span
 ```
 

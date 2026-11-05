@@ -1,8 +1,8 @@
 # Banco: i numeri della giornata piena
 
 Scheletro della tabella dei numeri del talk. I valori sono `[banco]` finché il banco non è stato rifatto sul
-sistema nuovo (cinque agenti, rami paralleli): le registrazioni che stanno oggi in `registrazioni/` sono quelle
-del sistema precedente, tag `tre-agenti-in-fila`, e le misure nuove non le leggono.
+sistema nuovo (cinque agenti, rami paralleli). `registrazioni/` parte vuota: il banco del sistema precedente sta in
+`archivio/banco-2026-11-06/` (e nel tag `banco-2026-11-06`), fuori da `--riepilogo`, `--misure` e `segnali.py`.
 
 ## Rifare il banco
 
@@ -28,8 +28,8 @@ Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione` e `s
 | Durata e costo, guasta contro sana, strato 0 | `[banco]` | `.venv/bin/python strati.py --riepilogo` (righe `strato-0 guasto` e `strato-0 sana`: colonne `sec med` e `$ med`) |
 | Token per richiesta (strato 5, guasta) | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `mediane`: `token`) |
 | Quota di `avvisi` sui token della richiesta | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `quota di avvisi sui token`); per mediana e 95° percentile `.venv/bin/python segnali.py registrazioni/strato-5` |
-| Costo per agente | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `token per agente`, a prezzo di `LISTINO`; non c'è un comando che lo stampi già in dollari) |
-| Quota delle riletture | `[banco]` | `.venv/bin/python strati.py --misure 5` (`chiamate al modello` e `token per agente`; nessun comando la calcola direttamente, va aggiunto o ricavato dagli span `gen_ai.usage.input_tokens`) |
+| Costo per agente | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `costo per agente, $ (mediana)`: costo a `LISTINO` delle chiamate al modello di ogni agente) |
+| Quota delle riletture | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `quota delle riletture`). Definizione: in ogni `invoke_agent`, ogni chiamata dopo la prima rilegge la conversazione fin lì; si sommano i token in ingresso della chiamata precedente, e si divide per i token in ingresso di tutta la richiesta |
 | Sbagliate su 30, guasta | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `guasto: n 30 · sbagliata ...`) |
 | Sbagliate su 30, sana | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `sana: n 30 · sbagliata ...`) |
 | Run in cui `avvisi` omette l'avviso | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `leggi_avvisi ha restituito l'avviso sulla sala B` contro `avvisi lo riporta a coordina`) |
