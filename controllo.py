@@ -1,4 +1,4 @@
-"""Il banco breve della settimana del talk: poche run per caso, confrontate con il banco del 3/11.
+"""Il banco breve della settimana del talk: poche run per caso, confrontate con il banco di 30 run.
 
 claude-haiku-5-5 e' un alias senza snapshot datato: dietro lo stesso nome il modello puo' cambiare. Questo
 controllo rifa' poche run per ogni caso del discorso, in una cartella sua (registrazioni/ resta intatta), e
@@ -22,17 +22,16 @@ import strati as s
 QUI = Path(__file__).parent
 BANCO = QUI / "registrazioni"
 
-# (cartella, dominio, correzione, guasto): i casi che il discorso usa
+# (cartella, correzione, guasto): i casi che il discorso usa
 CASI = [
-    ("strato-5", "orario", 0, True), ("strato-5", "orario", 0, False),
-    ("strato-5-freeze", "freeze", 0, True), ("strato-5-freeze", "freeze", 0, False),
-    ("strato-5-correzione", "orario", 1, True), ("strato-5-correzione-completa", "orario", 2, True),
+    ("strato-5", 0, True), ("strato-5", 0, False),
+    ("strato-5-correzione", 1, True), ("strato-5-correzione-completa", 2, True),
 ]
-SDK = ("strato-1", "orario", 0, True)  # due run bastano per vedere come l'SDK scrive gli span
+SDK = ("strato-1", 0, True)  # due run bastano per vedere come l'SDK scrive gli span
 
 
-def esegui(cartella: Path, dominio: str, correzione: int, guasto: bool, strato: int) -> dict:
-    s.STRATO, s.DOMINIO, s.CORREZIONE, s.MASCHERA, s.PRODUZIONE, s.OTLP = strato, s.DOMINI[dominio], correzione, False, False, None
+def esegui(cartella: Path, correzione: int, guasto: bool, strato: int) -> dict:
+    s.STRATO, s.CORREZIONE, s.MASCHERA, s.PRODUZIONE, s.OTLP = strato, correzione, False, False, None
     return s.esegui(guasto, cartella)
 
 
@@ -46,17 +45,19 @@ def costo(r: dict) -> float:
     return s.costo(f["in"], f["cache"], f["out"])
 
 
-def numeri(regs: list[dict], dominio: str) -> dict:
-    s.DOMINIO = s.DOMINI[dominio]
+def numeri(regs: list[dict]) -> dict:
     mm = [s.misura(r) for r in regs]
     forme = collections.Counter(m["grafo"] for m in mm)
-    c = sg.cruscotto(regs)
+    quota = lambda m: m["quota_avvisi"]
     return {
         "n": len(regs),
         "sbagliate": sum(m["esito"] == "sbagliata" for m in mm) / len(mm),
-        "riprovano": sum(m["riprove"] > 0 for m in mm) / len(mm),
-        "valida approva": c["approva"][0] / c["approva"][1] if c["approva"][1] else 0.0,
-        "avvisa l'utente": sum(m["avvisa"] for m in mm) / len(mm),
+        "nello stesso giro": sum(m["stesso_giro"] for m in mm) / len(mm),
+        "avvisi dopo la sala": sum(m["avvisi_dopo_sala"] for m in mm) / len(mm),
+        "avvisi lo riporta": sum(m["avvisi_riporta"] for m in mm) / len(mm),
+        "pagine avvisi mediana": statistics.median(m["pagine_avvisi"] for m in mm),
+        "quota avvisi mediana": statistics.median(map(quota, mm)),
+        "valida approva": sum(m["valida_approva"] > 0 for m in mm) / len(mm),
         "albero più comune": forme.most_common(1)[0][1] / len(mm),
         "forme dell'albero": len(forme),
         "costo mediana $": statistics.median(map(costo, regs)),
@@ -65,17 +66,19 @@ def numeri(regs: list[dict], dominio: str) -> dict:
 
 
 def confronta(cartella: Path):
-    print(f"{'caso':<36} {'numero':<20} {'banco 3/11':>11} {'controllo':>11}")
-    for nome, dominio, _, guasto in CASI:
+    print(f"{'caso':<36} {'numero':<20} {'banco':>11} {'controllo':>11}")
+    for nome, _, guasto in CASI:
         modo = "guasto" if guasto else "sana"
         b, k = leggi(BANCO / nome, modo), leggi(cartella / nome, modo)
         if not k:
             print(f"{nome + ' ' + modo:<36} nessuna run di controllo")
             continue
-        nb, nk = numeri(b, dominio), numeri(k, dominio)
+        nb, nk = numeri(b), numeri(k)
         for chiave in nb:
             vb, vk = nb[chiave], nk[chiave]
-            if isinstance(vb, float) and chiave not in ("costo mediana $", "secondi mediana"):
+            if chiave == "pagine avvisi mediana":
+                vb, vk = f"{vb:.0f}", f"{vk:.0f}"
+            elif isinstance(vb, float) and chiave not in ("costo mediana $", "secondi mediana"):
                 vb, vk = f"{vb:.0%}", f"{vk:.0%}"
             elif chiave == "costo mediana $":
                 vb, vk = f"{vb:.6f}", f"{vk:.6f}"
@@ -94,7 +97,7 @@ def confronta(cartella: Path):
             print(f"  {a:<40} {"c'è" if a in attributi else 'MANCA'}")
         print("  modello che risponde:", {s.attr(x, "gen_ai.response.model") for x in span} - {None})
     print("\nIl banco ha 30 run per caso, il controllo poche: una differenza di una run su dieci e' rumore. "
-          "Contano i cambi di verso (riprova sempre -> a volte, approva -> obietta) e i nomi degli span.")
+          "Contano i cambi di verso (avvisi lo riporta sempre -> a volte, valida approva -> obietta, i rami non piu' nello stesso giro) e i nomi degli span.")
 
 
 if __name__ == "__main__":
@@ -110,14 +113,15 @@ if __name__ == "__main__":
     n = a.run or 10
     casi = [(c, 5) for c in CASI] + [(SDK, 1)]
     quante = n * len(CASI) + 2
-    med = statistics.median(costo(r) for c, _ in casi for r in leggi(BANCO / c[0], "guasto" if c[3] else "sana"))
+    costi = [costo(r) for c, _ in casi for r in leggi(BANCO / c[0], "guasto" if c[2] else "sana")]
+    med = statistics.median(costi) if costi else 0.0  # senza banco registrato la stima non si puo' fare
     print(f"{quante} run ({n} per caso su {len(CASI)} casi, piu' 2 allo strato 1): circa $ {quante * med:.2f} "
           f"e {quante * 15 / 60:.0f} minuti, in sequenza")
     if a.stima:
         raise SystemExit
     cartella = QUI / "controllo" / f"{dt.date.today():%Y-%m-%d}"
-    for (nome, dominio, correzione, guasto), strato in casi:
+    for (nome, correzione, guasto), strato in casi:
         for _ in range(n if strato == 5 else 2):
-            esegui(cartella / nome, dominio, correzione, guasto, strato)
+            esegui(cartella / nome, correzione, guasto, strato)
         print("fatto:", nome, "guasto" if guasto else "sana")
     confronta(cartella)

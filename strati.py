@@ -21,7 +21,7 @@ Strati (ognuno contiene i precedenti):
   python strati.py --strato 3 --guasto --banco 5   cinque run, una riga ciascuna
   python strati.py --replay registrazioni/strato-3/<file>.json
   python strati.py --riepilogo                     una riga per strato e modo
-  python strati.py --misure 5                      grafo, riprove, verifiche e risposte dello strato 5
+  python strati.py --misure 5                      come ha deciso il grafo, cosa ha letto e riportato avvisi, token per agente
   python strati.py --righe                         righe di codice di ogni strato
 
 Le righe che esistono solo per osservare finiscono con il marcatore dello strato (s0 ... s5 dopo il cancelletto).
@@ -51,7 +51,7 @@ from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogR
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import StatusCode
 
 QUI = Path(__file__).parent
 load_dotenv(QUI / ".env")
@@ -123,9 +123,9 @@ def fai_log():
     if _provider_log:  # chiude i processori della run precedente (con --otlp, il thread del batch)
         _provider_log.shutdown()
         _provider_log = None
+    memoria_log = InMemoryLogRecordExporter()  # uno per run (e per provider: shutdown() chiude l'exporter)
     if STRATO < 3:
         return
-    memoria_log = InMemoryLogRecordExporter()  # s3  uno per provider: shutdown() chiude l'exporter
     provider = LoggerProvider()  # s3
     _provider_log = provider
     provider.add_log_record_processor(SimpleLogRecordProcessor(memoria_log))  # s3
@@ -341,7 +341,8 @@ PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del rag
 
 
 def _trova(tabella: dict, chiave: str):
-    k = next((k for k in tabella if k.lower() in chiave.lower() or chiave.lower() in k.lower()), None)
+    chiave = chiave.strip()
+    k = None if not chiave else next((k for k in tabella if k.lower() in chiave.lower() or chiave.lower() in k.lower()), None)
     return k, (tabella[k] if k else {"errore": "non trovato", "disponibili": list(tabella)})
 
 
@@ -496,7 +497,6 @@ def log_in_dict(r) -> dict:
 
 def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     memoria.clear()
-    memoria_log.clear()
     client = client or cliente()
     stato = {"piena": guasto, "fattura": [], "lock": threading.Lock()}
     inizio = time.monotonic()  # s0
@@ -688,7 +688,7 @@ def esito(r: dict) -> dict:
     risposta = r["risposta"] or ""
     return {"tracce": len(per_trace(span)), "span": len(span), "chiamate": f["chiamate"],
             "strumento": sum(attr(s, "gen_ai.operation.name") == "execute_tool" for s in span),
-            "sbagliata": sbagliata(risposta, r["modo"]), "verificato": approva(risposta),
+            "sbagliata": sbagliata(risposta, r["modo"]), "giusta": giusta(risposta, r["modo"]),
             "secondi": r["secondi"], "token": f["in"] + f["out"], "costo": costo(f["in"], f["cache"], f["out"]),
             "email": con_email(span), "attributi": sum(len(s["attributi"]) for s in span)}
 
@@ -709,12 +709,12 @@ def riepilogo(cartella: Path):
         speso += e["costo"]
         gruppi.setdefault((f.parent.name, r["modo"]), []).append(e)
     print(f"{'cartella':<28} {'modo':6} {'n':>3} {'trace':>5} {'span':>4} {'attr':>4} {'chiam.':>6} "
-          f"{'sbagl.':>6} {'verif.':>6} {'email':>5} {'sec med':>7} {'token med':>9} {'$ med':>9}")
+          f"{'sbagl.':>6} {'giuste':>6} {'email':>5} {'sec med':>7} {'token med':>9} {'$ med':>9}")
     for (cartella_, modo), ee in sorted(gruppi.items()):
         conta = lambda k: sum(e[k] for e in ee)
         med = lambda k: statistics.median(e[k] for e in ee)
         print(f"{cartella_:<28} {modo:6} {len(ee):>3} {med('tracce'):>5.0f} {med('span'):>4.0f} "
-              f"{med('attributi'):>4.0f} {med('chiamate'):>6.0f} {conta('sbagliata'):>6} {conta('verificato'):>6} "
+              f"{med('attributi'):>4.0f} {med('chiamate'):>6.0f} {conta('sbagliata'):>6} {conta('giusta'):>6} "
               f"{med('email'):>5.0f} {med('secondi'):>7.1f} {med('token'):>9.0f} {med('costo'):>9.6f}")
     print(f"\nspeso in tutto, dalle registrazioni: $ {speso:.4f}")
 
@@ -726,38 +726,131 @@ def approva(testo: str) -> bool:
     return testo.rstrip(" \n\"'»*").endswith("Verificato.")
 
 
-NON_CONFERMA = re.compile(r"non (posso|riesco|sono in grado|è possibile|ho potuto)|non confermat|da confermare|"
-                          r"conferm\w* (presso|con|all)|ti consiglio di (verificare|controllare)|non disponibile", re.I)
-
-
 def grafo(span) -> list[str]:
-    """La sequenza di strumenti e agenti nell'ordine in cui sono stati chiamati: chi>che cosa, ! se in errore."""
-    per_id, passi = {s["id"]: s for s in span}, []
-    for s, _ in in_ordine(span):
-        operazione, padre = attr(s, "gen_ai.operation.name"), per_id.get(s["padre"])
-        if operazione == "execute_tool":
-            chi = attr(s, "gen_ai.agent.name") or agente_di(s, per_id)
-            passi.append(f"{chi}>{attr(s, 'gen_ai.tool.name')}" + ("!" if s["errore"] else ""))
-        elif operazione == "invoke_agent" and not (padre and attr(padre, "gen_ai.operation.name") == "execute_tool"):
-            passi.append(f"codice>{attr(s, 'gen_ai.agent.name')}")  # un agente chiamato dal codice, non da un modello
+    """Chi ha chiamato che cosa, in una forma che non dipende da chi e' partito prima nei rami paralleli.
+
+    Le chiamate figlie dello stesso invoke_agent che partono prima che finisca la prima del giro sono dello
+    stesso giro (il modello le ha chieste insieme): si scrivono come insieme ordinato, `{avvisi,programma,sale}`.
+    Dentro un'agente-strumento, fra parentesi, cosa ha chiamato a sua volta; `!` se lo span e' in errore."""
+    figli = {}
+    for x in span:
+        figli.setdefault(x["padre"], []).append(x)
+    e = lambda x, operazione: attr(x, "gen_ai.operation.name") == operazione
+
+    def giri(agente_span):
+        chiamate = sorted((x for x in figli.get(agente_span["id"], []) if e(x, "execute_tool")), key=lambda x: x["inizio"])
+        gruppi = []
+        for x in chiamate:
+            if gruppi and x["inizio"] < gruppi[-1][0]["fine"]:  # parte prima che la prima del giro sia finita
+                gruppi[-1].append(x)
+            else:
+                gruppi.append([x])
+        return gruppi
+
+    def voce(gruppo):
+        nomi = []
+        for x in gruppo:
+            dentro = " ".join(voce(g) for a in sorted((a for a in figli.get(x["id"], []) if e(a, "invoke_agent")),
+                                                     key=lambda a: a["inizio"]) for g in giri(a))
+            nomi.append(attr(x, "gen_ai.tool.name") + ("!" if x["errore"] else "") + (f"({dentro})" if dentro else ""))
+        return nomi[0] if len(nomi) == 1 else "{" + ",".join(sorted(nomi)) + "}"
+
+    per_id, passi = {x["id"]: x for x in span}, []
+    radici = sorted((x for x in span if e(x, "invoke_agent")
+                     and not (per_id.get(x["padre"]) and e(per_id[x["padre"]], "execute_tool"))), key=lambda x: x["inizio"])
+    for a in radici:
+        nome = attr(a, "gen_ai.agent.name")
+        passi.append(f"codice>{nome}")  # un agente chiamato dal codice, non da un modello
+        passi += [f"{nome}>{voce(g)}" for g in giri(a)]
     return passi
 
 
-def ingresso_di(agente_span, span) -> str:
-    """Cosa ha letto l'agente alla prima chiamata al modello (strato 5): il messaggio utente che gli e' arrivato."""
-    figli = sorted((s for s in span if s["padre"] == agente_span["id"] and token(s)), key=lambda s: s["inizio"])
-    if not figli:
-        return ""
-    messaggi = json.loads(attr(figli[0], "gen_ai.input.messages") or "[]")
-    return " ".join(p.get("content", "") for m in messaggi[:1] for p in m.get("parts", []) if p.get("type") == "text")
+# Le misure della giornata piena. Ognuna dice da quale strato in su gli span che servono esistono: sotto, None.
+MINIMO_MISURE = {"stesso_giro": 2, "dopo_sala": 2, "token": 2, "letto": 3, "riporta": 3, "verdetti": 3, "email_valida": 3,
+                 "pagine": 4}
+AVVISI_SALA_B = re.compile(r"sala B", re.I)
+AVVISI_CAUSA = re.compile(r"chius|manutenzion|un.ora prima|anticipat", re.I)
+
+
+def riporta_avviso(testo: str) -> bool:
+    """Il testo dice che la sala B e' chiusa o che le sessioni anticipano: «sala B» insieme a una delle due cose."""
+    return bool(AVVISI_SALA_B.search(testo) and AVVISI_CAUSA.search(testo))
+
+
+def archi(span, verso=None) -> list:
+    """Gli archi fra agenti (execute_tool con destinazione), in ordine di inizio, magari solo verso certi agenti."""
+    return sorted((x for x in span if attr(x, "gen_ai.operation.name") == "execute_tool"
+                   and attr(x, "gen_ai.transfer.target.name") and (verso is None or attr(x, "gen_ai.transfer.target.name") in verso)),
+                  key=lambda x: x["inizio"])
+
+
+def strumenti(span, nome: str) -> list:
+    return [x for x in span if attr(x, "gen_ai.operation.name") == "execute_tool" and attr(x, "gen_ai.tool.name") == nome
+            and not attr(x, "gen_ai.transfer.target.name")]
+
+
+def stesso_giro(span) -> bool:
+    """programma, sale e avvisi sono partiti insieme: gli archi hanno lo stesso padre e si sovrappongono nel tempo."""
+    primi = {}
+    for x in archi(span, ("programma", "sale", "avvisi")):
+        primi.setdefault(attr(x, "gen_ai.transfer.target.name"), x)
+    tre = list(primi.values())
+    return len(tre) == 3 and len({x["padre"] for x in tre}) == 1 and max(x["inizio"] for x in tre) < min(x["fine"] for x in tre)
+
+
+def avvisi_dopo_sala(span) -> bool:
+    """avvisi e' stato chiamato quando programma o sale avevano gia' finito: coordina sapeva gia' la sala."""
+    precedenti = archi(span, ("programma", "sale"))
+    return any(p["fine"] <= a["inizio"] for a in archi(span, ("avvisi",)) for p in precedenti)
+
+
+def pagine_avvisi(span) -> int:
+    return sum(attr(x, "avvisi.pagine", 0) for x in strumenti(span, "leggi_avvisi"))
+
+
+def verdetti(span) -> list[bool]:
+    return [approva(attr(x, "gen_ai.tool.call.result")) for x in archi(span, ("valida",))
+            if attr(x, "gen_ai.tool.call.result") is not None]
+
+
+def token_per_agente(span) -> dict:
+    """Token (ingresso e uscita) delle chiamate al modello, per agente che le ha fatte."""
+    per_id, fuori = {x["id"]: x for x in span}, {}
+    for x in span:
+        if t := token(x):
+            nome = agente_di(x, per_id)
+            fuori[nome] = fuori.get(nome, 0) + t["in"] + t["out"]
+    return fuori
+
+
+def quota_avvisi(span) -> float | None:
+    """Che parte dei token della richiesta e' spesa dall'agente avvisi (None se non ci sono token)."""
+    per_agente = token_per_agente(span)
+    return per_agente.get("avvisi", 0) / sum(per_agente.values()) if per_agente else None
 
 
 def misura(r: dict) -> dict:
-    """Provvisoria: il grafo e l'esito. Le misure della giornata piena (correttezza, token per agente) sono da riscrivere."""
-    span, risposta = r["span"], r["risposta"] or ""
-    passi, livelli = grafo(span), [lv for _, lv in in_ordine(span)]
-    return {**esito(r), "grafo": " ".join(passi), "profondita": max(livelli) + 1 if livelli else 0,
-            "esito": "sbagliata" if sbagliata(risposta, r["modo"]) else "giusta" if giusta(risposta, r["modo"]) else "altro"}
+    """Cosa e' successo in una run: il grafo, cosa ha letto e riportato avvisi, i verdetti di valida, i token per agente.
+    None dove gli span che servono non esistono a quello strato."""
+    span, risposta, strato = r["span"], r["risposta"] or "", r["strato"]
+    se = lambda nome, valore: valore() if strato >= MINIMO_MISURE[nome] else None
+    livelli = [lv for _, lv in in_ordine(span)]
+    avvisi_tool, a_avvisi = strumenti(span, "leggi_avvisi"), archi(span, ("avvisi",))
+    verdetto = se("verdetti", lambda: verdetti(span))
+    return {**esito(r), "grafo": " ".join(grafo(span)), "profondita": max(livelli) + 1 if livelli else 0,
+            "esito": "sbagliata" if sbagliata(risposta, r["modo"]) else "giusta" if giusta(risposta, r["modo"]) else "altro",
+            "stesso_giro": se("stesso_giro", lambda: stesso_giro(span)),
+            "avvisi_dopo_sala": se("dopo_sala", lambda: avvisi_dopo_sala(span)),
+            "pagine_avvisi": se("pagine", lambda: pagine_avvisi(span)),
+            "tool_ha_avviso": se("letto", lambda: any(AVVISO_CHIAVE in attr(x, "gen_ai.tool.call.result", "") for x in avvisi_tool)),
+            "avvisi_riporta": se("riporta", lambda: any(riporta_avviso(attr(x, "gen_ai.tool.call.result", "")) for x in a_avvisi)),
+            "avvisi_con_sala": se("riporta", lambda: any(AVVISI_SALA_B.search(attr(x, "gen_ai.tool.call.arguments", "")) for x in a_avvisi)),
+            "valida_chiamate": None if verdetto is None else len(verdetto),
+            "valida_approva": None if verdetto is None else sum(verdetto),
+            "email_a_valida": se("email_valida", lambda: any(EMAIL.search(attr(x, "gen_ai.tool.call.arguments", ""))
+                                                             for x in archi(span, ("valida",)))),
+            "token_agente": se("token", lambda: token_per_agente(span)),
+            "quota_avvisi": se("token", lambda: quota_avvisi(span))}
 
 
 def misure(cartelle: list[Path]):
@@ -770,17 +863,46 @@ def misure(cartelle: list[Path]):
             mm = [misura(r) for r in regs if r["modo"] == modo]
             if not mm:
                 continue
+            n, strato = len(mm), regs[0]["strato"]
             med = lambda k: statistics.median(m[k] for m in mm)
-            print(f"{modo}: n {len(mm)} · " + " · ".join(
+
+            def conta(k, minimo, etichetta):  # quante run su n; se lo strato non basta lo dice
+                if any(m[k] is None for m in mm):
+                    return f"  {etichetta:<52} serve lo strato {minimo}"
+                return f"  {etichetta:<52} {sum(bool(m[k]) for m in mm):>2} su {n}"
+            print(f"{modo}: n {n} · " + " · ".join(
                 f"{e} {sum(1 for m in mm if m['esito'] == e)}" for e in ("sbagliata", "giusta", "altro")))
+            print(conta("stesso_giro", 2, "programma, sale, avvisi nello stesso giro"))
+            print(conta("avvisi_dopo_sala", 2, "avvisi chiamato dopo che si sapeva la sala"))
+            print(conta("avvisi_con_sala", 3, "la richiesta ad avvisi nomina la sala B"))
+            print(conta("tool_ha_avviso", 3, "leggi_avvisi ha restituito l'avviso sulla sala B"))
+            print(conta("avvisi_riporta", 3, "avvisi lo riporta a coordina"))
+            if strato < MINIMO_MISURE["pagine"]:
+                print(f"  {'pagine di avvisi lette':<52} serve lo strato 4")
+            else:
+                print(f"  {'pagine di avvisi lette':<52} mediana {med('pagine_avvisi'):.0f} (da {min(m['pagine_avvisi'] for m in mm)} "
+                      f"a {max(m['pagine_avvisi'] for m in mm)})")
+            if any(m["valida_approva"] is None for m in mm):
+                print(f"  {'valida approva':<52} serve lo strato 3")
+            else:
+                print(f"  {'valida approva':<52} {sum(m['valida_approva'] > 0 for m in mm):>2} su {n} · "
+                      f"mai chiamata in {sum(m['valida_chiamate'] == 0 for m in mm)}")
+            print(conta("email_a_valida", 3, "l'email arriva a valida"))
+            if strato < MINIMO_MISURE["token"]:
+                print(f"  {'token per agente':<52} serve lo strato 2")
+            else:
+                agenti = sorted({a for m in mm for a in m["token_agente"]})
+                print(f"  {'token per agente (mediana)':<52} " + " · ".join(
+                    f"{a} {statistics.median(m['token_agente'].get(a, 0) for m in mm):.0f}" for a in agenti))
+                print(f"  {'quota di avvisi sui token della richiesta':<52} mediana {med('quota_avvisi'):.0%}")
             print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello "
                   f"{med('chiamate'):.0f} · token {med('token'):.0f} · secondi {med('secondi'):.1f} · $ {med('costo'):.6f}")
             grafi = {}
             for m in mm:
                 grafi[m["grafo"]] = grafi.get(m["grafo"], 0) + 1
-            print(f"  {len(grafi)} grafi diversi:")
-            for g, n in sorted(grafi.items(), key=lambda kv: -kv[1]):
-                print(f"    {n:>2} × {g}")
+            print(f"  {len(grafi)} forme dell'albero:")
+            for g, k in sorted(grafi.items(), key=lambda kv: -kv[1]):
+                print(f"    {k:>2} × {g}")
         print()
 
 
@@ -828,7 +950,7 @@ if __name__ == "__main__":
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
-    p.add_argument("--misure", type=int, metavar="STRATO", help="grafo, riprove, verifiche e risposte di uno strato")
+    p.add_argument("--misure", type=int, metavar="STRATO", help="le misure della giornata piena e della tranquilla in uno strato")
     p.add_argument("--righe", action="store_true")
     p.add_argument("--codice", type=int, choices=range(6), metavar="STRATO", help="le righe di uno strato, pulite per le slide")
     a = p.parse_args()

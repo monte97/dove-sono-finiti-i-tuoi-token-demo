@@ -15,7 +15,6 @@ import segnali as sg
 
 TEMPO = "http://localhost:3210"
 CRUSCOTTO = Path(__file__).parent / "cruscotto" / "grafana" / "segnali.json"
-STRUMENTI = ("leggi_programma", "leggi_calendario", "cerca", "valida")
 
 
 def query_del_cruscotto() -> dict[str, str]:
@@ -43,23 +42,33 @@ def valori(q: str, attributo: str) -> list[int]:
 
 
 def dal_cruscotto(query: dict[str, str], cartella: str, modo: str) -> dict:
+    """I refId che il cruscotto deve avere: richieste, forme, approvati, verdetti, costo, quota, pagine.
+    I valori per richiesta stanno sulla radice (richiesta.*), le forme sono una metrica per valore dell'attributo."""
     q = {k: v.replace("$cartella", cartella).replace("$modo", modo) for k, v in query.items()}
     tot = lambda k: round(sum(serie(q[k]).values()))
     forme = serie(q["forme"])
     costi = valori(q["costo"], "richiesta.costo_microusd")
+    quote = valori(q["quota"], "richiesta.quota_avvisi_pct")
+    pagine = valori(q["pagine"], "richiesta.pagine_avvisi")
     return {"richieste": tot("richieste"),
-            "richiamati": {n: c for n in STRUMENTI if (c := tot(f"richiamati_{n}"))},
             "forme": (len(forme), round(max(forme.values(), default=0))),
-            "approva": (tot("approvati"), tot("verdetti")), "copia": tot("copia"),
-            "costo": (len(costi), statistics.median(costi) if costi else None, sg.p95(costi) if costi else None)}
+            "approva": (tot("approvati"), tot("verdetti")),
+            "costo": (len(costi), statistics.median(costi) if costi else None, sg.p95(costi) if costi else None),
+            "quota": (len(quote), statistics.median(quote) if quote else None, sg.p95(quote) if quote else None),
+            "pagine": (len(pagine), statistics.median(pagine) if pagine else None, max(pagine, default=None))}
 
 
 def da_segnali(regs: list[dict]) -> dict:
+    """Quello che il cruscotto deve mostrare, dai segnali: gli stessi arrotondamenti che riassunto() scrive sulla radice."""
     c = sg.cruscotto(regs)
-    costi = [round(sg.segnali(r)["costo"] * 1e6) for r in regs]
-    return {"richieste": c["n"], "richiamati": c["ritenta"], "forme": (len(c["forme"]), c["forme"].most_common(1)[0][1]),
-            "approva": c["approva"], "copia": c["copia"],
-            "costo": (len(costi), statistics.median(costi), sg.p95(costi))}
+    gg = [sg.segnali(r) for r in regs]
+    costi = [round(g["costo"] * 1e6) for g in gg]
+    quote = [round(g["quota_avvisi"] * 100) for g in gg]
+    pagine = [g["pagine"] for g in gg]
+    return {"richieste": c["n"], "forme": (len(c["forme"]), c["forme"].most_common(1)[0][1]), "approva": c["approva"],
+            "costo": (len(costi), statistics.median(costi), sg.p95(costi)),
+            "quota": (len(quote), statistics.median(quote), sg.p95(quote)),
+            "pagine": (len(pagine), statistics.median(pagine), max(pagine))}
 
 
 if __name__ == "__main__":

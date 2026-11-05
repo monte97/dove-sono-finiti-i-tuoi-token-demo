@@ -225,13 +225,11 @@ def test_orchestratore_grafo():
         assert padre_di(reg, f"execute_tool {strumento}") == f"invoke_agent {agente}"
     passaggio = attributi(reg, "execute_tool valida")
     assert passaggio["gen_ai.agent.name"] == "coordina" and passaggio["gen_ai.transfer.mode"] == "return_to_caller"
-    # il grafo e' nell'ordine di inizio degli span; i tre rami partono insieme, quindi il loro ordine reciproco non e' fisso
-    passi = s.grafo(reg["span"])
-    assert passi[0] == "codice>coordina" and passi[-1] == "coordina>valida"
-    assert sorted(passi[1:-1]) == sorted(["coordina>programma", "programma>leggi_programma", "coordina>sale",
-                                          "sale>leggi_sale", "coordina>avvisi", "avvisi>leggi_avvisi"])
+    # la forma e' canonica: i rami partono in ordine libero, ma sono un insieme ordinato
+    assert s.grafo(reg["span"]) == ["codice>coordina", "coordina>{avvisi(leggi_avvisi),programma(leggi_programma),sale(leggi_sale)}",
+                                    "coordina>valida"]
     m = s.misura(reg)
-    assert m["profondita"] == 5 and m["verificato"] and m["esito"] == "sbagliata"
+    assert m["profondita"] == 5 and m["esito"] == "sbagliata" and m["valida_approva"] == 1
 
 
 def test_i_tre_rami_girano_in_parallelo():
@@ -285,6 +283,12 @@ def test_eccezione_di_un_ramo_risale():
             raise AssertionError("l'eccezione e' sparita")
     finally:
         s.esegui_strumento = vero
+
+
+def test_trova_con_chiave_vuota_non_trova_niente():
+    assert s._trova(s.PROGRAMMA, "")[0] is None and s._trova(s.PROGRAMMA, "  ")[0] is None
+    assert s._trova(s.PROGRAMMA, "kubernetes da zero")[0] == "Kubernetes da zero"
+    assert json.loads(s.leggi_dato("leggi_programma", {}, {"piena": True}))["errore"] == "non trovato"
 
 
 def test_esito_per_modo():
