@@ -318,6 +318,15 @@ def test_tre_esiti_giornata_piena():
                   "Alle 15:00, non alle 14:00.",
                   "Oggi alle 15:00 in sala B. Il 14:00 è il pranzo."):
         assert v(frase) == "sbagliata", frase
+    # la negazione vale solo nella sua clausola
+    assert v("Oggi alle 15:00 in sala B. Nessun cambio di sala, ma la sala B chiude dalle 15:00.") == "avvisata"
+    assert v("Oggi alle 15:00. Non ci sono variazioni: la sala B chiude dalle 15 e le sessioni sono anticipate.") == "avvisata"
+    assert v("Oggi alle 15:00 in sala B, nessun avviso di chiusura o manutenzione.") == "sbagliata"
+    assert v("Oggi alle 15:00. La sala B non è chiusa.") == "sbagliata"
+    assert s.riporta_avviso("Nessun cambio di sala, ma la sala B chiude dalle 15:00")
+    assert s.riporta_avviso("Non ci sono variazioni: la sala B chiude dalle 15 e le sessioni sono anticipate")
+    assert not s.riporta_avviso("Nessun avviso di chiusura o manutenzione per la sala B")
+    assert not s.riporta_avviso("La sala B non è chiusa")
     # e nell'altro verso, avvisate anche con un'altra frase che nega
     assert v("Oggi alle 15:00 in sala B. Nessun cambio di sala. Ma la sala B chiude per manutenzione.") == "avvisata"
     assert v("Oggi alle 15:00 in sala B, forse alle 14:00.") == "avvisata"

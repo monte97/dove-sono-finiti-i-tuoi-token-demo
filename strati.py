@@ -303,7 +303,7 @@ ESITI = ("giusta", "avvisata", "sbagliata")
 # Limite noto: sono regex su frasi italiane; un giro di parole fuori da questi modi (per esempio «alle tre del
 # pomeriggio») non si riconosce e finisce in sbagliata; un 15:00 superato detto in un modo fuori elenco («il programma
 # parlava delle 15:00») resta un 15:00 dato, quindi avvisata e non giusta (verso conservativo); una negazione
-# lontana dalla causa nella stessa frase la annulla anche quando non la regge. Nella giornata tranquilla: giusta se c'e' 15:00 e non 14:00.
+# vale solo nella sua clausola (vedi _clausole): «Nessun cambio di sala, ma la sala B chiude» avverte. Nella giornata tranquilla: giusta se c'e' 15:00 e non 14:00.
 _QUINDICI_SUPERATO = re.compile(
     r"\bnon (?:più )?(?:alle|per le|delle|dalle)\s+15:00"
     r"|(?:\binvece\b|anzich[eé]|al posto\b|\brispetto\b|anticipat\w*|spostat\w*|\bchius\w*|\bchiude\b)[^.;!?]{0,30}?15:00"
@@ -312,18 +312,19 @@ _QUINDICI_SUPERATO = re.compile(
     r"|(?:previst[oa]|era)\s+alle\s+15:00\s+nel\s+programma", re.I)
 # Cosa vale come avvertimento: una causa (chiusura, manutenzione, un'ora prima, anticipo) oppure le 14:00 presentate
 # come possibili o probabili. Una 14:00 nuda non avverte («il 14:00 e' il pranzo»). Una negazione che regge la causa nella
-# stessa frase la toglie, come in riporta_avviso: «nessun avviso di chiusura», «non risulta che sia chiusa»,
+# stessa clausola la toglie, come in riporta_avviso: «nessun avviso di chiusura», «non risulta che sia chiusa»,
 # «nessuna anticipazione prevista», «non alle 14:00».
-_CAUSA = re.compile(r"chius|manutenzion|un.ora prima|anticip", re.I)
+_CAUSA = re.compile(r"chius|chiud|manutenzion|un.ora prima|anticip", re.I)
 _QUATTORDICI_POSSIBILE = re.compile(r"(?:potrebbe|probabilmente|forse|dovrebbe|magari)[^.;!?]{0,30}?14:00", re.I)
 
 
 def _avverte(risposta: str) -> bool:
     for f in re.split(r"[.!?;\n]+", risposta):
-        negazioni = list(AVVISI_NEGA.finditer(f))
-        spie = [m.start() for rx in (_CAUSA, _QUATTORDICI_POSSIBILE) for m in rx.finditer(f)]
-        if any(not any(n.end() <= p for n in negazioni) for p in spie):
-            return True
+        for k in _clausole(f):
+            negazioni = list(AVVISI_NEGA.finditer(k))
+            spie = [m.start() for rx in (_CAUSA, _QUATTORDICI_POSSIBILE) for m in rx.finditer(k)]
+            if any(not any(n.end() <= p for n in negazioni) for p in spie):
+                return True
     return False
 
 
@@ -886,6 +887,15 @@ AVVISI_NEGA = re.compile(r"\bnessun\w*|\bnon\s+(?:risult\w+|ci\s+sono|c'è|vi\s+
                          r"sono\s+previst\w+|è|sarà|sono)\s+", re.I)
 
 
+_CONFINE_CLAUSOLA = re.compile(r"(?i:,\s*ma\b|\s+ma\s+|\bperò\b|\btuttavia\b|:\s|\s[—–]\s|,\s+(?=la sala\b))|,\s+(?=[A-Z])")
+
+
+def _clausole(frase: str) -> list[str]:
+    """Una frase a pezzi: «, ma», «ma», «però», «tuttavia», «:», «—» e una virgola seguita da maiuscola o da «la sala»
+    chiudono la clausola. La negazione di una clausola non vale per le altre."""
+    return _CONFINE_CLAUSOLA.split(frase)
+
+
 def riporta_avviso(testo: str) -> bool:
     """Una frase dice che la sala B e' chiusa o che le sessioni anticipano: «sala B» e una causa nella stessa frase.
     Una negazione scarta la causa solo se sta prima di essa e la regge («nessun avviso di chiusura», «non risultano
@@ -895,9 +905,10 @@ def riporta_avviso(testo: str) -> bool:
     for f in re.split(r"[.!?;\n]+", testo):
         if not AVVISI_SALA_B.search(f):
             continue
-        negazioni = list(AVVISI_NEGA.finditer(f))
-        if any(not any(n.end() <= c.start() for n in negazioni) for c in AVVISI_CAUSA.finditer(f)):
-            return True
+        for k in _clausole(f):  # la negazione vale solo nella sua clausola
+            negazioni = list(AVVISI_NEGA.finditer(k))
+            if any(not any(n.end() <= c.start() for n in negazioni) for c in AVVISI_CAUSA.finditer(k)):
+                return True
     return False
 
 
