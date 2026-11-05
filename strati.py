@@ -308,8 +308,8 @@ ISTRUZIONI = {
     "sale": ("Sei l'assistente delle sale di DevFest Immaginario 2026. Per sala, piano e capienza usa sempre lo strumento "
              "leggi_sale. Rispondi in una riga."),
     "avvisi": ("Sei l'assistente delle comunicazioni di DevFest Immaginario 2026. Gli avvisi di oggi li leggi con lo "
-               "strumento leggi_avvisi. Riporta al massimo tre righe, con gli avvisi più importanti per la richiesta "
-               "che hai ricevuto."),
+               "strumento leggi_avvisi. Riporta solo gli avvisi che riguardano ciò che ti è stato chiesto, al "
+               "massimo tre righe, senza supposizioni; se non ce ne sono, rispondi «Nessun avviso.»."),
     "valida": ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino all'utente. "
                "Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che l'orario sia valido, "
                "che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente alla domanda e coerente "
@@ -319,7 +319,7 @@ ISTRUZIONI = {
 DESCRIZIONI = {
     "programma": "Agente che trova giorno, ora e sala di una sessione leggendo il programma pubblicato. Risponde in una riga.",
     "sale": "Agente che trova sala, piano e capienza di una sessione leggendo il database delle sale. Risponde in una riga.",
-    "avvisi": "Agente che riporta gli avvisi di oggi più importanti per la richiesta, al massimo tre righe.",
+    "avvisi": "Agente che riporta gli avvisi di oggi che riguardano la richiesta, al massimo tre righe.",
     "valida": ("Agente che controlla una risposta prima che arrivi all'utente. Restituisce la risposta verificata "
                "oppure cosa non va."),
 }
