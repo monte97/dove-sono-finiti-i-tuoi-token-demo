@@ -1,6 +1,13 @@
-# Porte fuori da 3000/3200: Grafana 3377, Tempo 3210, OTLP HTTP 4418
+# Porte fuori da 3000/3100/3200/4317/4318: Grafana 3377, Tempo 3210, OTLP HTTP 4418 (e' del collector)
 name: osservare-a-strati
 services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.130.0
+    command: ["--config=/etc/collector.yaml"]
+    volumes:
+      - ./collector.yaml:/etc/collector.yaml:ro
+    ports: ["4418:4318"]
+    depends_on: [tempo, loki]
   tempo:
     image: grafana/tempo:2.8.1
     command: ["-config.file=/etc/tempo.yaml"]
@@ -8,7 +15,14 @@ services:
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml:ro
       - tempo:/var/tempo
-    ports: ["3210:3200", "4418:4318"]
+    ports: ["3210:3200"]
+  loki:
+    image: grafana/loki:3.5.1
+    command: ["-config.file=/etc/loki.yaml"]
+    volumes:
+      - ./loki.yaml:/etc/loki.yaml:ro
+      - loki:/loki
+    ports: ["3110:3100"]
   grafana:
     image: grafana/grafana:12.0.2
     environment:
@@ -20,6 +34,7 @@ services:
       - ./grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
       - ./grafana/segnali.json:/var/lib/grafana/dashboards/segnali.json:ro
     ports: ["3377:3000"]
-    depends_on: [tempo]
+    depends_on: [tempo, loki]
 volumes:
   tempo:
+  loki:

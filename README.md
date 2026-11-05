@@ -59,7 +59,7 @@ per strato e per caso, girato il 3/11/2026 sul modello e sull'SDK fissati in `re
 ```bash
 .venv/bin/python strati.py --riepilogo        # una riga per cartella e modo: risposte sbagliate, tempi, token, costo
 .venv/bin/python strati.py --misure 5         # riprove, alberi, approvazioni di valida, cosa arriva a valida
-.venv/bin/python segnali.py registrazioni/strato-5 registrazioni/strato-5-freeze   # i cinque segnali, dai soli span
+.venv/bin/python segnali.py registrazioni/strato-5 registrazioni/strato-5-correzione   # i cinque segnali, dai soli span
 ```
 
 `segnali.py` calcola i cinque segnali di «Lunedì, in produzione» leggendo solo gli span, come farebbe un
@@ -68,19 +68,20 @@ approva, le risposte nate da una copia vecchia, il costo per richiesta alla medi
 
 ## Il cruscotto
 
-Gli stessi cinque segnali su Grafana, letti da Tempo con TraceQL. Le porte stanno fuori da 3000 e 3200:
-Grafana su 3377, Tempo su 3210, OTLP HTTP su 4418.
+I segnali su Grafana, letti da Tempo con TraceQL, e i log correlati letti da Loki: dallo span di uno strumento si
+salta alle sue righe di log (stesso trace id). Un collector riceve OTLP HTTP e smista span a Tempo e log a Loki.
+Le porte stanno fuori da 3000, 3100, 3200 e 4317/4318: Grafana su 3377, Tempo su 3210, Loki su 3110, OTLP HTTP su 4418.
 
 ```bash
 docker compose -f cruscotto/compose.yaml up -d
-.venv/bin/python tempo.py registrazioni/strato-5 registrazioni/strato-5-freeze   # le registrazioni, come appena finite
-.venv/bin/python verifica_cruscotto.py registrazioni/strato-5 registrazioni/strato-5-freeze   # cruscotto contro segnali.py
+.venv/bin/python tempo.py registrazioni/strato-5 registrazioni/strato-5-correzione   # le registrazioni, come appena finite
+.venv/bin/python verifica_cruscotto.py registrazioni/strato-5 registrazioni/strato-5-correzione   # cruscotto contro segnali.py
 open "http://localhost:3377/d/segnali?var-cartella=strato-5&var-modo=guasto"
 ```
 
 Le metriche TraceQL contano span, non richieste: per questo ogni richiesta porta i suoi fatti sullo span in
-cima, `invoke_workflow` (`richiesta.forma`, `richiesta.costo_microusd`, `richiesta.richiamati`,
-`richiesta.copia_vecchia`). Il cruscotto guarda l'ultima ora, e `tempo.py` sposta gli orari delle registrazioni
+cima, `invoke_workflow` (`richiesta.forma`, `richiesta.costo_microusd`, `richiesta.quota_avvisi_pct`,
+`richiesta.pagine_avvisi`). Il cruscotto guarda l'ultima ora, e `tempo.py` sposta gli orari delle registrazioni
 ad adesso: dopo un'ora si rimandano. `banco.cartella` e `banco.modo` servono solo a filtrare le run della demo.
 
 ## Rifare le run

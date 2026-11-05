@@ -277,6 +277,29 @@ def test_in_otlp():
     assert not tempo.gia_in_tempo("strato-5-correzione", cerca=lambda q: 0)
 
 
+def test_log_in_otlp_con_gli_id_degli_span():
+    import tempo
+    reg = run()
+    tool = [x for x in reg["span"] if x["nome"].startswith("execute_tool")]
+    reg["log_otel"] = [{"trace": x["trace"], "span": x["id"], "livello": "INFO", "testo": f"{x['nome']}: riga {i}"}
+                       for x in tool for i in range(2)]
+    mappa = tempo.rimappa(reg, 2_000_000_000.0)
+    spans = tempo.in_otlp(reg, "strato-5", 2_000_000_000.0, mappa)
+    logs = tempo.log_in_otlp(reg, mappa)
+    assert len(logs) == len(reg["log_otel"])
+    per_span = {x.context.span_id: x for x in spans}
+    for l in logs:
+        lr = l.log_record
+        x = per_span[lr.span_id]  # il log appartiene a uno span che esiste, nella stessa trace
+        assert lr.trace_id == x.context.trace_id and x.name.startswith("execute_tool")
+        assert x.start_time <= lr.timestamp <= x.end_time  # orari spostati come quelli degli span
+    originali = {l["span"] for l in reg["log_otel"]}
+    assert {l.log_record.span_id for l in logs} == {mappa["ids"][i] for i in originali}
+    assert {l.log_record.body for l in logs} == {l["testo"] for l in reg["log_otel"]}
+    senza = {**reg, "log_otel": [{**reg["log_otel"][0], "span": "0" * 16}]}
+    assert tempo.log_in_otlp(senza, mappa) == []  # span sconosciuto: il log si salta
+
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):
