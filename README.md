@@ -200,6 +200,19 @@ Il controllo della settimana del talk fa poche run per caso in una cartella sua 
 .venv/bin/python controllo.py --confronta controllo/AAAA-MM-GG
 ```
 
+Il confronto finisce con le soglie dello strato 5 senza correzione, cioè quando la storia regge:
+
+| | Banco (30 run) | Controllo (10 run) |
+|---|---|---|
+| giornata piena, risposte giuste | nessuna | al massimo 1 |
+| giornata piena, sbagliate e silenziose | almeno due terzi | almeno 5 |
+| giornata tranquilla, giuste | tutte | tutte |
+
+Il banco del 5/11 sta dentro: 0 giuste e 22 sbagliate su 30 nella giornata piena, 30 giuste su 30 nella
+tranquilla. Le 8 risposte che non sono sbagliate avvertono l'utente, e in 7 ad accorgersene è il ricontrollo di
+`valida`, che richiama `avvisi`. Se il controllo esce dalle soglie, il modello dietro l'alias è cambiato: si
+rifà il banco e si aggiornano i numeri.
+
 ## Cosa questa demo non dice
 
 - Le convenzioni GenAI di OpenTelemetry sono sperimentali: i nomi possono cambiare. L'SDK di Anthropic le usa a

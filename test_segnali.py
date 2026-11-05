@@ -350,6 +350,28 @@ def test_la_query_del_cruscotto_approva_come_approva():
         assert bool(rx.fullmatch(testo)) == s.approva(testo), testo[:120]
     assert sum(s.approva(t) for t in casi[:10]) == 6  # i primi dieci: sei approvano, quattro no
 
+
+def test_soglie_del_controllo():
+    import controllo as k
+    guasto = lambda g, sb: {"giuste": g, "sbagliate": sb}
+    assert k.fuori_soglia(guasto(0.0, 22 / 30), "guasto", "banco") == []
+    assert k.fuori_soglia(guasto(1 / 30, 22 / 30), "guasto", "banco")      # una giusta nel banco: fuori
+    assert k.fuori_soglia(guasto(0.0, 0.6), "guasto", "banco")             # meno di due terzi sbagliate: fuori
+    assert k.fuori_soglia(guasto(0.1, 0.5), "guasto", "controllo") == []   # 1 giusta e 5 sbagliate su 10: dentro
+    assert k.fuori_soglia(guasto(0.2, 0.7), "guasto", "controllo")         # 2 giuste su 10: fuori
+    assert k.fuori_soglia(guasto(0.0, 0.4), "guasto", "controllo")         # 4 sbagliate su 10: fuori
+    assert k.fuori_soglia({"giuste": 1.0}, "sana", "controllo") == []
+    assert k.fuori_soglia({"giuste": 0.9}, "sana", "controllo")
+
+
+def test_il_banco_del_5_11_sta_dentro_le_soglie():
+    import controllo as k
+    for modo in ("guasto", "sana"):
+        regs = k.leggi(k.BANCO / "strato-5", modo)
+        if not regs:
+            return  # repo senza banco: niente da controllare
+        assert k.fuori_soglia(k.numeri(regs), modo, "banco") == [], modo
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):

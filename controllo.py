@@ -77,7 +77,29 @@ def numeri(regs: list[dict]) -> dict:
     }
 
 
+# Le soglie perche' la storia regga (decise il 5/11 sul banco della versione movimentata). Il banco ha 30 run,
+# il controllo 10: per il controllo la soglia e' piu' larga. Il guasto non deve mai dare l'orario giusto in modo
+# stabile e deve restare in maggioranza sbagliato e silenzioso; la giornata tranquilla deve essere sempre giusta.
+SOGLIE = {
+    "banco": {"guasto": {"giuste": (None, 0.0), "sbagliate": (2 / 3, None)}, "sana": {"giuste": (1.0, None)}},
+    "controllo": {"guasto": {"giuste": (None, 0.1), "sbagliate": (0.5, None)}, "sana": {"giuste": (1.0, None)}},
+}
+
+
+def fuori_soglia(numeri_: dict, modo: str, quale: str) -> list[str]:
+    """Le soglie violate per un caso dello strato 5 senza correzione; vuota se il caso regge."""
+    violate = []
+    for chiave, (minimo, massimo) in SOGLIE[quale][modo].items():
+        v = numeri_[chiave]
+        if minimo is not None and v < minimo - 1e-9:
+            violate.append(f"{chiave} {v:.0%} sotto il minimo {minimo:.0%}")
+        if massimo is not None and v > massimo + 1e-9:
+            violate.append(f"{chiave} {v:.0%} sopra il massimo {massimo:.0%}")
+    return violate
+
+
 def confronta(cartella: Path):
+    esiti_soglie = []
     print(f"{'caso':<36} {'numero':<20} {'banco':>11} {'controllo':>11}")
     for nome, _, guasto in CASI:
         modo = "guasto" if guasto else "sana"
@@ -89,6 +111,9 @@ def confronta(cartella: Path):
             print(f"{nome + ' ' + modo:<36} banco da rigenerare: nessuna registrazione nel formato nuovo")
             continue
         nb, nk = numeri(b), numeri(k)
+        if nome == "strato-5":
+            for quale, nn in (("banco", nb), ("controllo", nk)):
+                esiti_soglie.append((f"{quale} {modo}", fuori_soglia(nn, modo, quale)))
         for chiave in nb:
             vb, vk = nb[chiave], nk[chiave]
             if chiave == "pagine avvisi mediana":
@@ -111,6 +136,12 @@ def confronta(cartella: Path):
                   "gen_ai.usage.reasoning.output_tokens", "anthropic.message.stop_reason", "gen_ai.response.model"):
             print(f"  {a:<40} {"c'è" if a in attributi else 'MANCA'}")
         print("  modello che risponde:", {s.attr(x, "gen_ai.response.model") for x in span} - {None})
+    if esiti_soglie:
+        print("\nsoglie (strato 5 senza correzione):")
+        for chi, violate in esiti_soglie:
+            print(f"  {chi:<20} " + ("dentro" if not violate else "FUORI: " + "; ".join(violate)))
+        if any(v for _, v in esiti_soglie):
+            print("  qualcosa e' cambiato sotto il modello: rifare il banco e aggiornare i numeri del talk")
     print("\nIl banco ha 30 run per caso, il controllo poche: una differenza di una run su dieci e' rumore. "
           "Contano i cambi di verso (avvisi lo riporta sempre -> a volte, valida che ricontrolla o avvisi che chiede a programma dove prima non succedeva, valida approva -> obietta, i rami non piu' nello stesso giro) e i nomi degli span.")
 
