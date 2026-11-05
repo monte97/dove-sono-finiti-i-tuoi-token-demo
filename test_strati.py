@@ -602,6 +602,15 @@ def test_banco_continua_dopo_una_run_fallita():
             s.esegui = orig
     assert fallite == 1 and len(riuscite) == 2
     assert "run 1 fallita" in errori.getvalue() and "guasto finto" in errori.getvalue()
+    # a fine banco, con una run fallita, il processo esce con stato 1; senza fallite, no
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        try:
+            s.concludi_banco(3, riuscite, fallite)
+            assert False, "doveva uscire"
+        except SystemExit as e:
+            assert e.code == 1
+        s.concludi_banco(2, riuscite, 0)  # tutte riuscite: nessuna uscita
+    assert "run fallite: 1 su 3" in fuori.getvalue()
 
 
 def test_misure_sotto_lo_strato_2_senza_albero():
@@ -835,6 +844,15 @@ def test_dialogo_nelle_misure_stampate():
                  "valida richiede ad avvisi", "valida richiede a programma", "guardia dei cicli scattata", "massimi: profondità"):
         assert riga in testo, riga
     assert " 2 su 2" in testo
+    assert "guardia mai scattata" in testo  # le run finte non la fanno scattare: il conteggio e' zero e la riga lo dice
+    # e quando scatta, la riga non lo dice
+    scatta = Path(tempfile.mkdtemp()) / "strato-5-correzione-dialogo"
+    scatta.mkdir(parents=True)
+    reg_ciclo, _ = corri_annidato(correzione=3, dialogo=True, annidate=True, ciclo="avvisi")
+    (scatta / "0.json").write_text(json.dumps(reg_ciclo))
+    with contextlib.redirect_stdout(io.StringIO()) as fuori_ciclo:
+        s.misure([scatta])
+    assert "guardia dei cicli scattata" in fuori_ciclo.getvalue() and "mai scattata" not in fuori_ciclo.getvalue()
     altra = Path(tempfile.mkdtemp()) / "strato-5"  # fuori dal dialogo le righe del dialogo non ci sono
     altra.mkdir(parents=True)
     (altra / "a.json").write_text(json.dumps(corri(5)[0]))

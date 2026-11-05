@@ -861,6 +861,14 @@ def esegui_banco(n: int, guasto: bool, cartella: Path, client=None) -> tuple[lis
     return riuscite, fallite
 
 
+def concludi_banco(n: int, riuscite: list, fallite: int):
+    """Stampa il banco; se una run e' fallita esce con stato 1 (uno script o una pipeline se ne accorge)."""
+    banco(riuscite)
+    if fallite:
+        print(f"\nrun fallite: {fallite} su {n} (non registrate)")
+        raise SystemExit(1)
+
+
 def riepilogo(cartella: Path):
     gruppi, speso = {}, 0.0
     for f in sorted(cartella.rglob("*.json")):
@@ -1211,7 +1219,8 @@ def misure(cartelle: list[Path]):
             if strato < MINIMO_MISURE["cicli"]:
                 print(f"  {'guardia dei cicli scattata':<52} serve lo strato 2")
             else:
-                print(f"  {'guardia dei cicli scattata':<52} {sum(m['cicli'] > 0 for m in mm):>2} su {n} · {sum(m['cicli'] for m in mm)} volte")
+                print(f"  {'guardia dei cicli scattata':<52} {sum(m['cicli'] > 0 for m in mm):>2} su {n} · {sum(m['cicli'] for m in mm)} volte"
+                      + (" · guardia mai scattata" if not any(m['cicli'] for m in mm) else ""))
                 print(f"  massimi: profondità {max(m['profondita'] for m in mm)} (agenti uno dentro l'altro "
                       f"{max(m['profondita_agenti'] for m in mm)}) · span {max(m['span'] for m in mm)}")
             print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello "
@@ -1445,9 +1454,6 @@ if __name__ == "__main__":
         coda = ["", "-correzione", "-correzione-completa", "-correzione-dialogo"][CORREZIONE] + ("-maschera" if MASCHERA else "") + ("-produzione" if PRODUZIONE else "")
         cartella = QUI / "registrazioni" / f"strato-{a.strato}{coda}"
         if a.banco:
-            riuscite, fallite = esegui_banco(a.banco, a.guasto, cartella)
-            banco(riuscite)
-            if fallite:
-                print(f"\nrun fallite: {fallite} su {a.banco} (non registrate)")
+            concludi_banco(a.banco, *esegui_banco(a.banco, a.guasto, cartella))
         else:
             mostra(esegui(a.guasto, cartella))
