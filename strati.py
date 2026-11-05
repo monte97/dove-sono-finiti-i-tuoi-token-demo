@@ -1270,8 +1270,8 @@ def schema(regs: list[dict], senza_strumenti: bool = False) -> tuple[str, str]:
             e = arco.setdefault(k, [0, 0])
             e[0] += 1
             e[1] += v
-    # rimpalli: chi e' chiamato da due chiamanti diversi nella stessa run; i chiamanti extra (non coordina) sono l'arco del rimpallo
-    due_chiamanti, extra = {}, set()
+    # rimpalli: chi e' chiamato da due chiamanti diversi nella stessa run
+    due_chiamanti, doppia_strada = {}, False
     for ar in archi_run:
         chiamanti = {}
         for (da, a) in ar:
@@ -1282,11 +1282,16 @@ def schema(regs: list[dict], senza_strumenti: bool = False) -> tuple[str, str]:
                 due_chiamanti.setdefault(a, [0, set()])
                 due_chiamanti[a][0] += 1
                 due_chiamanti[a][1] |= ds
-                extra |= {(d, a) for d in ds if d != "coordina"}
+        doppia_strada |= {"coordina", "programma"} <= chiamanti.get("sale", set())
     guardie = [(r, [x for x in archi(r["span"]) if attr(x, "error.type") == "ciclo"]) for r in regs]
     arco_guardia = {(attr(x, "gen_ai.agent.name"), attr(x, "gen_ai.transfer.target.name")) for _, g in guardie for x in g}
-    rimpalli = {k for k in arco if k[0] == "valida" or k == ("avvisi", "programma")} | extra | arco_guardia
-    rimpalli = {k for k in rimpalli if k in arco}
+    # tratteggiati: chi controlla o chiede a una fonte fuori dal giro di coordina (valida che richiama, avvisi che chiede a
+    # programma) e gli archi respinti dalla guardia. In rosso, pieno: la strada in piu' coordina → sale, quando sale e'
+    # chiamato anche da programma nella stessa run (programma → sale e' la strada normale, resta piena).
+    tratteggiati = {k for k in arco if k[0] == "valida" or k == ("avvisi", "programma")} | arco_guardia
+    tratteggiati = {k for k in tratteggiati if k in arco}
+    in_rosso = {("coordina", "sale")} if doppia_strada and ("coordina", "sale") in arco else set()
+    rimpalli = tratteggiati | in_rosso
 
     # --- il testo ---
     righe = [f"schema del sistema: {n} run, strato {strato}", "", "chi chiama chi (in quante run · volte in totale)"]
@@ -1323,22 +1328,26 @@ def schema(regs: list[dict], senza_strumenti: bool = False) -> tuple[str, str]:
     # --- Mermaid ---
     def etichetta(k):
         run, volte = arco[k]
-        media = volte / run
-        return f"{run}/{n}" + (f" ×{media:g}" if media > 1 else "")
+        media = round(volte / run, 1)
+        return f"{run}/{n}" + (f" ×{media:.1f}" if media > 1 else "")
     mm = ["flowchart LR", "  %% legenda: ogni arco e' «in quante run su quante» (×N = volte per run, in media);",
-          "  %% tratteggiato rosso = rimpallo (stesso dato per due strade, valida che ricontrolla, avvisi che chiede a programma, guardia)"]
+          "  %% tratteggiato = chi controlla o chiede a una fonte fuori dal giro di coordina (valida che richiama, avvisi che "
+          "chiede a programma, arco respinto dalla guardia); rosso = coordina → sale quando sale e' chiamato anche da programma"]
     nodi = sorted(agenti, key=_ordine)
     mm.append("  utente([utente])")
     mm += [f"  {a}[{a}]" for a in nodi]
     mm.append(f"  utente -->|{n}/{n}| coordina")
-    stile = []
+    tratti, rossi = [], []
     for i, k in enumerate(ordinati, start=1):
-        punta = "-.->" if k in rimpalli else "-->"
-        mm.append(f"  {k[0]} {punta}|{etichetta(k)}| {k[1]}")
-        if k in rimpalli:
-            stile.append(i)
-    if stile:
-        mm.append(f"  linkStyle {','.join(map(str, stile))} stroke:#c0392b,stroke-width:2px,color:#c0392b")
+        mm.append(f"  {k[0]} {'-.->' if k in tratteggiati else '-->'}|{etichetta(k)}| {k[1]}")
+        if k in tratteggiati:
+            tratti.append(i)
+        if k in in_rosso:
+            rossi.append(i)
+    if tratti:
+        mm.append(f"  linkStyle {','.join(map(str, tratti))} stroke:#7f8c8d,stroke-width:2px,color:#7f8c8d")
+    if rossi:
+        mm.append(f"  linkStyle {','.join(map(str, rossi))} stroke:#c0392b,stroke-width:3px,color:#c0392b")
     return "\n".join(righe), "\n".join(mm)
 
 

@@ -943,12 +943,19 @@ def test_schema_mermaid_stabile_e_valido():
         assert re.fullmatch(r"\w+ (-->|-\.->)\|[^|]+\| \w+", r), r
     assert "utente -->|2/2| coordina" in archi_
     assert "coordina -->|2/2| avvisi" in archi_
-    assert "programma -.->|2/2 ×2| sale" in archi_ and "valida -.->|2/2| avvisi" in archi_  # rimpalli tratteggiati
-    assert "coordina -->|2/2| sale" in archi_  # la strada normale resta piena
-    # linkStyle: gli indici sono quelli degli archi tratteggiati (numerati dal primo arco scritto)
-    stile = next(r for r in blocco if r.strip().startswith("linkStyle")).split()[1].split(",")
+    assert "programma -->|2/2 ×2.0| sale" in archi_  # la strada normale di sale resta piena...
+    assert "valida -.->|2/2| avvisi" in archi_  # ...i controlli di valida sono tratteggiati
+    assert "coordina -->|2/2| sale" in archi_  # coordina → sale resta un arco pieno, ma in rosso (sotto)
+    # linkStyle: tratteggiati in grigio, la strada in piu' coordina → sale in rosso (indici numerati dal primo arco scritto)
     scritti = [r for r in blocco if "-->" in r or "-.->" in r]
-    assert [i for i, r in enumerate(scritti) if "-.->" in r] == [int(i) for i in stile]
+    grigi = next(r for r in blocco if r.strip().startswith("linkStyle") and "#7f8c8d" in r).split()[1].split(",")
+    rossi = next(r for r in blocco if r.strip().startswith("linkStyle") and "#c0392b" in r).split()[1].split(",")
+    assert [i for i, r in enumerate(scritti) if "-.->" in r] == [int(i) for i in grigi]
+    assert [scritti[int(i)].strip() for i in rossi] == ["coordina -->|2/2| sale"]
+    assert sum(r.strip().startswith("linkStyle") for r in blocco) == 2
+    leggenda = " ".join(r for r in blocco if r.strip().startswith("%%"))
+    assert "tratteggiato = chi controlla o chiede a una fonte fuori dal giro di coordina" in leggenda
+    assert "rosso = coordina → sale quando sale e' chiamato anche da programma" in leggenda
     nodi = [r.strip() for r in blocco if re.fullmatch(r"\s+\w+(\[\w+\]|\(\[\w+\]\))", r)]
     assert nodi == ["utente([utente])", "coordina[coordina]", "programma[programma]", "sale[sale]", "avvisi[avvisi]", "valida[valida]"]
 
@@ -962,7 +969,13 @@ def test_schema_volte_per_run_nell_etichetta():
     y["id"] = "duplicato"
     sdoppiato["span"].append(y)
     _, mermaid = s.schema([sdoppiato])
-    assert "coordina -->|1/1 ×2| sale" in mermaid and "coordina -->|1/1| programma" in mermaid
+    assert "coordina -->|1/1 ×2.0| sale" in mermaid and "coordina -->|1/1| programma" in mermaid
+    assert "#c0392b" not in mermaid  # sale e' chiamato solo da coordina: nessuna strada in piu'
+    # la media si arrotonda a un decimale: 3 volte in 2 run = ×1.5, 7 in 3 = ×2.3, e 1.04 non e' piu' di 1
+    base = json.loads(json.dumps(regs[0]))
+    due = [json.loads(json.dumps(base)), sdoppiato]  # 1 chiamata in una run, 2 nell'altra
+    _, m3 = s.schema(due)
+    assert "coordina -->|2/2 ×1.5| sale" in m3
 
 
 def test_schema_filtra_per_modo():
