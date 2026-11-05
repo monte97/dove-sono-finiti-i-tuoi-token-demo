@@ -16,7 +16,6 @@ import json
 import statistics
 from pathlib import Path
 
-import segnali as sg
 import strati as s
 
 QUI = Path(__file__).parent

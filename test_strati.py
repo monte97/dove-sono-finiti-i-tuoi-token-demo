@@ -301,6 +301,10 @@ def test_esito_per_modo():
     assert not s.giusta("Alle 15:00 o forse alle 14:00.", "sana")
 
 
+def tipo_di(voce: str) -> str:
+    return voce.split(":")[0]
+
+
 def test_avvisi_deterministici_e_senza_workshop():
     piena, tranquilla = s.avvisi(True), s.avvisi(False)
     assert len(piena) == s.PAGINE_PIENA and len(tranquilla) == s.PAGINE_TRANQUILLA
@@ -311,8 +315,16 @@ def test_avvisi_deterministici_e_senza_workshop():
     assert len(set(rumore)) == len(rumore)  # vario
     for v in rumore:  # niente nomina il workshop, un suo orario, o la sala B
         assert not any(x in v.lower() for x in ("workshop", "kubernetes", "sala b")) and "14:" not in v and "15:" not in v
+        assert not s.riporta_avviso(v), v  # il rivelatore non si fa ingannare dal rumore
     assert any("allarme" in v and "11:00" in v for v in rumore) and any("domani" in v for v in rumore)
     assert not any("sala b" in v.lower() for p in tranquilla for v in p)
+    tipi = {}
+    for v in rumore:  # equilibrio: nessun tipo di avviso prende il sopravvento, e i tipi sono tanti
+        tipi[tipo_di(v)] = tipi.get(tipo_di(v), 0) + 1
+    assert len(tipi) >= 20, tipi
+    assert max(tipi.values()) / len(rumore) <= 0.15, tipi
+    for k in ("Accessibilità", "Registrazioni", "Cambio relatore", "Feedback", "Merchandise", "Treni", "Navetta"):
+        assert k in tipi, k
 
 
 def test_correzione_istruzioni_e_filtro_per_sala():
@@ -329,6 +341,9 @@ def test_correzione_istruzioni_e_filtro_per_sala():
         giornata = attributi(reg, "execute_tool leggi_avvisi")["gen_ai.tool.call.result"]
         assert giornata == "- " + s.AVVISO_CHIAVE  # solo la sala B, una riga
         assert s.leggi_dato("leggi_avvisi", {"sala": "b"}, {"piena": False}) == "Nessun avviso."
+        for variante in ("B", "b", " B ", "sala B", "Sala B", "B."):  # il filtro non si rompe per come il modello scrive la sala
+            assert s.leggi_dato("leggi_avvisi", {"sala": variante}, {"piena": True}) == "- " + s.AVVISO_CHIAVE, variante
+        assert s.schemi()["leggi_avvisi"]["input_schema"]["properties"]["sala"]["enum"] == ["A", "B", "C"]
         assert s.leggi_dato("leggi_avvisi", {"sala": "A"}, {"piena": True}).startswith("- Sala A:")
     finally:
         s.CORREZIONE = 0
@@ -358,7 +373,8 @@ def test_codice_pulito():
         assert not any(x in s.codice(n) for x in ("STRATO", "fai_provider", "MASCHERA")), n
     assert 'modo = "content"' in s.codice(5) and "MascheraEmail(processore)" in s.codice(5)
     assert "MascheraEmail" not in s.codice(1) and '"tracer_provider": provider' in s.codice(1)
-    assert "open_telemetry=" in s.codice(1)
+    assert "open_telemetry=" in s.codice(1) and "**prova" not in s.codice(1)  # la slide non porta l'argomento dei test
+    assert not s.codice(3).rstrip().endswith("fai_log()")  # niente chiamata orfana in fondo
     t = s.codice(3)
     assert 'span.set_attribute("gen_ai.tool.call.arguments"' in t and "if STRATO" not in t
     assert "\nspan.set_attribute(\"gen_ai.tool.call.arguments\"" in t  # il corpo dell'if perde il rientro
@@ -384,6 +400,61 @@ def test_replay_registrazione_dello_spike():
     with contextlib.redirect_stdout(io.StringIO()) as fuori:
         s.mostra(vecchia, registrata=True)
     assert "variante A" in fuori.getvalue().splitlines()[0]
+
+
+def test_strumento_sconosciuto_e_un_errore():
+    r = json.loads(s.leggi_dato("leggi_meteo", {}, {"piena": True}))
+    assert r == {"errore": "strumento sconosciuto: leggi_meteo"}
+
+
+def test_replay_strato_5_guasto_resta_corto():
+    reg, _ = corri(5)
+    giornata = attributi(reg, "execute_tool leggi_avvisi")["gen_ai.tool.call.result"]
+    assert giornata.count("\n") + 1 == s.PAGINE_PIENA * s.AVVISI_PER_PAGINA  # lo span tiene tutto
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        s.mostra(json.loads(json.dumps(reg)), registrata=True)
+    righe = re.sub(r"\033\[\d+m", "", fuori.getvalue()).splitlines()
+    assert len(righe) < 120, len(righe)  # prima: oltre 500
+    assert any("… 400 righe" in r for r in righe)
+
+
+def test_banco_continua_dopo_una_run_fallita():
+    sbagliare = [True]
+
+    def server(richiesta):
+        if sbagliare:
+            return httpx.Response(500, json={"type": "error", "error": {"type": "api_error", "message": "guasto finto"}})
+        return risposta_finta(richiesta)
+
+    s.STRATO = 2
+    client = s.cliente(api_key="finta", max_retries=0, http_client=httpx.Client(transport=httpx.MockTransport(server)))
+    errori = io.StringIO()
+    with contextlib.redirect_stderr(errori):
+        orig = s.esegui
+
+        def una_volta(guasto, cartella, client=None):
+            try:
+                return orig(guasto, cartella, client)
+            finally:
+                sbagliare.clear()  # la prima run fallisce, le altre vanno
+        s.esegui = una_volta
+        try:
+            riuscite, fallite = s.esegui_banco(3, True, CARTELLA, client)
+        finally:
+            s.esegui = orig
+    assert fallite == 1 and len(riuscite) == 2
+    assert "run 1 fallita" in errori.getvalue() and "guasto finto" in errori.getvalue()
+
+
+def test_misure_sotto_lo_strato_2_senza_albero():
+    cartella = Path(tempfile.mkdtemp()) / "strato-1"
+    reg, _ = corri(1)
+    cartella.mkdir(parents=True)
+    (cartella / "a.json").write_text(json.dumps(reg))
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        s.misure([cartella])
+    testo = fuori.getvalue()
+    assert "serve lo strato 2" in testo and "forme dell'albero:" not in testo and "2 × " not in testo
 
 
 def test_replay_riepilogo_righe():
