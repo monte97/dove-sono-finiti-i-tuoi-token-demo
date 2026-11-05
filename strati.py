@@ -729,7 +729,7 @@ def approva(testo: str) -> bool:
 def grafo(span) -> list[str]:
     """Chi ha chiamato che cosa, in una forma che non dipende da chi e' partito prima nei rami paralleli.
 
-    Le chiamate figlie dello stesso invoke_agent che partono prima che finisca la prima del giro sono dello
+    Le chiamate figlie dello stesso invoke_agent che partono mentre una del giro e' ancora in corso sono dello
     stesso giro (il modello le ha chieste insieme): si scrivono come insieme ordinato, `{avvisi,programma,sale}`.
     Dentro un'agente-strumento, fra parentesi, cosa ha chiamato a sua volta; `!` se lo span e' in errore."""
     figli = {}
@@ -741,7 +741,7 @@ def grafo(span) -> list[str]:
         chiamate = sorted((x for x in figli.get(agente_span["id"], []) if e(x, "execute_tool")), key=lambda x: x["inizio"])
         gruppi = []
         for x in chiamate:
-            if gruppi and x["inizio"] < gruppi[-1][0]["fine"]:  # parte prima che la prima del giro sia finita
+            if gruppi and x["inizio"] < max(y["fine"] for y in gruppi[-1]):  # parte mentre una del giro e' ancora in corso
                 gruppi[-1].append(x)
             else:
                 gruppi.append([x])
@@ -769,12 +769,17 @@ def grafo(span) -> list[str]:
 MINIMO_MISURE = {"stesso_giro": 2, "dopo_sala": 2, "token": 2, "letto": 3, "riporta": 3, "verdetti": 3, "email_valida": 3,
                  "pagine": 4}
 AVVISI_SALA_B = re.compile(r"sala B", re.I)
-AVVISI_CAUSA = re.compile(r"chius|manutenzion|un.ora prima|anticipat", re.I)
+# la causa legata alla sala (non «chiusura» da sola: «keynote di chiusura» e' rumore), e le negazioni
+AVVISI_CAUSA = re.compile(r"\bchius[ao]\b|\bchiud\w+|manutenzion|un.ora prima|anticipat", re.I)
+AVVISI_NEGA = re.compile(r"\bnon\b|\bnessun\w*|\bniente\b", re.I)
 
 
 def riporta_avviso(testo: str) -> bool:
-    """Il testo dice che la sala B e' chiusa o che le sessioni anticipano: «sala B» insieme a una delle due cose."""
-    return bool(AVVISI_SALA_B.search(testo) and AVVISI_CAUSA.search(testo))
+    """Una frase dice che la sala B e' chiusa o che le sessioni anticipano: «sala B» e la causa nella stessa frase,
+    e nessuna negazione nella frase. Limite noto: una parafrasi senza nessuna di queste parole (es. «la B chiude presto»,
+    «la sala B non si usa dalle 15») non viene riconosciuta; una negazione nella frase fa scartare anche un riporto vero."""
+    return any(AVVISI_SALA_B.search(f) and AVVISI_CAUSA.search(f) and not AVVISI_NEGA.search(f)
+               for f in re.split(r"[.!?;\n]+", testo))
 
 
 def archi(span, verso=None) -> list:

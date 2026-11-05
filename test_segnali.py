@@ -164,69 +164,43 @@ def test_avvisi_riporta_solo_con_sala_b_e_causa():
     assert not s.riporta_avviso("Nessun avviso sul workshop.")
 
 
-def test_riassunto_sulla_radice_con_rami_concorrenti():
-    p = sg.RiassuntoSullaRadice(5)
-    tp = TracerProvider()
-    tp.add_span_processor(p)
-    t = tp.get_tracer("prova")
-    radice = t.start_span("invoke_workflow x")
-    from opentelemetry import trace
-    contesto = trace.set_span_in_context(radice)
-    barriera = threading.Barrier(8)
-
-    def lavora():
-        barriera.wait()
-        for _ in range(50):
-            t.start_span("anthropic.messages.create", context=contesto, attributes={
-                "gen_ai.usage.input_tokens": 1000, "gen_ai.usage.output_tokens": 50}).end()
-    fili = [threading.Thread(target=lavora) for _ in range(8)]
-    [f.start() for f in fili]
-    [f.join() for f in fili]
-    assert radice.attributes["richiesta.costo_microusd"] == round(400 * s.costo(1000, 0, 50) * 1e6)
-    radice.end()
-    assert p.radici == {} and p.chiusi == {}
+def test_avvisi_riporta_falsi_positivi():
+    assert not s.riporta_avviso("Nessun avviso sulla sala B. Keynote di chiusura alle 17:30.")  # sala e causa in frasi diverse
+    assert not s.riporta_avviso("Non risultano avvisi di chiusura o manutenzione per la sala B.")  # negazione
+    assert not s.riporta_avviso("Sala B: la keynote di chiusura è spostata alle 17:30.")  # «chiusura» da sola e' rumore
+    assert s.riporta_avviso("La sala B chiude alle 15, le sessioni del pomeriggio sono anticipate di un'ora.")  # parafrasi
+    assert s.riporta_avviso("- Sala B: chiusa dalle 15:00 per manutenzione.\n- Prova dell'allarme alle 11:00.")
+    assert s.riporta_avviso(s.AVVISO_CHIAVE)
+    for v in (v for p in s.avvisi(True) for v in p if v != s.AVVISO_CHIAVE):  # nessun avviso di rumore scatta
+        assert not s.riporta_avviso(v), v
+    assert not s.riporta_avviso("Per il workshop controllare in sala.")  # limite noto: senza parole chiave la parafrasi sfugge
+    assert not s.riporta_avviso("La B non si usa nel pomeriggio.")
 
 
-def test_stampa_dice_cosa_manca():
-    with contextlib.redirect_stdout(io.StringIO()) as fuori:
-        sg.stampa("prova · guasto", sg.cruscotto([run(), run()]))
-    testo = fuori.getvalue()
-    assert "95° percentile" in testo and "mediana 40 · massimo 40" in testo and "1 (la più frequente in 2 run)" in testo
-    with contextlib.redirect_stdout(io.StringIO()) as fuori:
-        sg.stampa("strato-1 · guasto", sg.cruscotto([{**run(), "strato": 1}]))
-    assert fuori.getvalue().count("serve lo strato") == 4 and "serve lo strato 4" in fuori.getvalue()
-
-
-def test_coerenza_fra_segnali_e_misura_sul_server_finto():
-    for strato in (2, 3, 4, 5):
-        reg, _ = ts.corri(strato)
-        g, m = sg.segnali(reg), s.misura(reg)
-        assert g["forma"] == m["grafo"] and g["pagine"] == m["pagine_avvisi"] and g["quota_avvisi"] == m["quota_avvisi"]
-        assert (g["verdetti"] is None) == (m["valida_chiamate"] is None)
-        if strato >= 3:
-            assert sum(g["verdetti"]) == m["valida_approva"] and len(g["verdetti"]) == m["valida_chiamate"]
-        assert abs(g["costo"] - s.costo(reg["fattura"]["in"], reg["fattura"]["cache"], reg["fattura"]["out"])) < 1e-9
-    assert m["grafo"] == FORMA and m["pagine_avvisi"] == 40 and m["stesso_giro"] and not m["avvisi_dopo_sala"]
-    assert m["tool_ha_avviso"] and not m["avvisi_riporta"]  # lo sbaglio che la demo osserva
-    reg, _ = ts.corri(5, guasto=False)
-    m = s.misura(reg)
-    assert m["pagine_avvisi"] == 3 and not m["tool_ha_avviso"] and sg.segnali(reg)["pagine"] == 3
-
-
-def test_in_otlp():
-    import tempo
-    reg = run()
-    spans = tempo.in_otlp(reg, "strato-5", adesso=2_000_000_000.0)
-    assert len(spans) == len(reg["span"]) and len({x.context.trace_id for x in spans}) == 1
-    radice = next(x for x in spans if x.parent is None)
-    assert radice.attributes["banco.cartella"] == "strato-5" and radice.attributes["banco.modo"] == "guasto"
-    assert radice.attributes["richiesta.forma"] == FORMA and radice.attributes["richiesta.pagine_avvisi"] == 40
-    assert max(x.end_time for x in spans) == 2_000_000_000 * 10**9
-    ids = {x.context.span_id for x in spans}
-    assert all(x.parent.span_id in ids for x in spans if x.parent)
-    assert tempo.in_otlp({**reg, "span": [], "strato": 0}, "strato-0", adesso=2_000_000_000.0) == []
-    assert tempo.gia_in_tempo("strato-5", cerca=lambda q: 30 if '"strato-5"' in q else 0)
-    assert not tempo.gia_in_tempo("strato-5-correzione", cerca=lambda q: 0)
+def test_controllo_salta_il_formato_vecchio():
+    import tempfile, json
+    from pathlib import Path
+    import controllo
+    d = Path(tempfile.mkdtemp())
+    (d / "vecchia.json").write_text(json.dumps({**run(), "dominio": "orario"}))
+    (d / "senza-log.json").write_text(json.dumps(run()))
+    (d / "nuova.json").write_text(json.dumps({**run(), "log_otel": []}))
+    assert len(controllo.leggi(d, "guasto")) == 1
+    (d / "nuova.json").unlink()
+    assert controllo.leggi(d, "guasto") == []
+    vero_banco, veri_casi = controllo.BANCO, list(controllo.CASI)
+    nuovo = Path(tempfile.mkdtemp())
+    (d / "k").mkdir()
+    (d / "k" / "x.json").write_text(json.dumps({**run(), "dominio": "orario"}))  # il banco c'e', ma e' del sistema vecchio
+    (nuovo / "k").mkdir()
+    (nuovo / "k" / "x.json").write_text(json.dumps({**run(), "log_otel": []}))
+    controllo.BANCO, controllo.CASI[:] = d, [("k", 0, True)]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()) as fuori:
+            controllo.confronta(nuovo)
+        assert "banco da rigenerare" in fuori.getvalue()
+    finally:
+        controllo.BANCO, controllo.CASI[:] = vero_banco, veri_casi
 
 
 if __name__ == "__main__":

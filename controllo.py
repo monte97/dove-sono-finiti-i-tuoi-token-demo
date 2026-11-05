@@ -37,7 +37,12 @@ def esegui(cartella: Path, correzione: int, guasto: bool, strato: int) -> dict:
 
 def leggi(cartella: Path, modo: str) -> list[dict]:
     regs = [json.loads(f.read_text()) for f in sorted(cartella.glob("*.json"))] if cartella.is_dir() else []
-    return [r for r in regs if r["modo"] == modo]
+    return [r for r in regs if r["modo"] == modo and nuova(r)]
+
+
+def nuova(r: dict) -> bool:
+    """Le registrazioni del sistema vecchio (campo dominio, niente log_otel) non si leggono con le misure nuove."""
+    return "dominio" not in r and "log_otel" in r
 
 
 def costo(r: dict) -> float:
@@ -72,6 +77,9 @@ def confronta(cartella: Path):
         b, k = leggi(BANCO / nome, modo), leggi(cartella / nome, modo)
         if not k:
             print(f"{nome + ' ' + modo:<36} nessuna run di controllo")
+            continue
+        if not b:
+            print(f"{nome + ' ' + modo:<36} banco da rigenerare: nessuna registrazione nel formato nuovo")
             continue
         nb, nk = numeri(b), numeri(k)
         for chiave in nb:
@@ -114,7 +122,9 @@ if __name__ == "__main__":
     casi = [(c, 5) for c in CASI] + [(SDK, 1)]
     quante = n * len(CASI) + 2
     costi = [costo(r) for c, _ in casi for r in leggi(BANCO / c[0], "guasto" if c[2] else "sana")]
-    med = statistics.median(costi) if costi else 0.0  # senza banco registrato la stima non si puo' fare
+    if not costi:
+        raise SystemExit("banco da rigenerare: nessuna registrazione nel formato nuovo, la stima del costo non si puo' fare")
+    med = statistics.median(costi)
     print(f"{quante} run ({n} per caso su {len(CASI)} casi, piu' 2 allo strato 1): circa $ {quante * med:.2f} "
           f"e {quante * 15 / 60:.0f} minuti, in sequenza")
     if a.stima:
