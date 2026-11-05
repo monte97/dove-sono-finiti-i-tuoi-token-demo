@@ -39,14 +39,14 @@ import statistics
 import textwrap
 import threading
 import time
-import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
 from opentelemetry import trace
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler  # s3
+from opentelemetry.instrumentation.logging.handler import LoggingHandler  # s3
+from opentelemetry.sdk._logs import LoggerProvider  # s3
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor  # s3
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -95,12 +95,11 @@ def senza_email(v):  # s5
     return tuple(senza_email(x) for x in v) if isinstance(v, (list, tuple)) else v  # s5
 
 
-# l'handler dell'SDK 1.44 avvisa che e' deprecato (a favore di opentelemetry-instrumentation-logging): lo usiamo apposta
-warnings.filterwarnings("ignore", message="`LoggingHandler` in", category=DeprecationWarning)
 LOG = logging.getLogger("osservare-a-strati")  # i log come li scrive gia' un team: codice applicativo
 LOG.setLevel(logging.INFO)
 memoria_log = InMemoryLogRecordExporter()  # s3  come `memoria`, per i log; dal vivo OTLP verso un backend
 _handler = None
+_provider_log = None
 
 
 def processore_otlp_log(url: str):
@@ -117,13 +116,18 @@ def url_log(url: str) -> str:
 def fai_log():
     """Collega il logging di Python a OpenTelemetry: ogni riga esce col trace_id e lo span_id dello span corrente.
     Un solo handler alla volta: quello della run precedente viene tolto."""
-    global _handler
+    global _handler, _provider_log, memoria_log
     if _handler:
         LOG.removeHandler(_handler)
         _handler = None
+    if _provider_log:  # chiude i processori della run precedente (con --otlp, il thread del batch)
+        _provider_log.shutdown()
+        _provider_log = None
     if STRATO < 3:
         return
+    memoria_log = InMemoryLogRecordExporter()  # s3  uno per provider: shutdown() chiude l'exporter
     provider = LoggerProvider()  # s3
+    _provider_log = provider
     provider.add_log_record_processor(SimpleLogRecordProcessor(memoria_log))  # s3
     if OTLP:
         provider.add_log_record_processor(processore_otlp_log(url_log(OTLP)))
