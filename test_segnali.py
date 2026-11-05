@@ -300,6 +300,23 @@ def test_log_in_otlp_con_gli_id_degli_span():
     assert tempo.log_in_otlp(senza, mappa) == []  # span sconosciuto: il log si salta
 
 
+def test_log_in_otlp_usa_l_orario_registrato():
+    import tempo
+    reg = run()
+    x = next(x for x in reg["span"] if x["nome"].startswith("execute_tool"))
+    meta = (x["inizio"] + x["fine"]) / 2
+    base = {"trace": x["trace"], "span": x["id"], "livello": "INFO"}
+    reg["log_otel"] = [{**base, "testo": "a", "tempo": meta}, {**base, "testo": "b", "tempo": x["fine"] + 100},
+                       {**base, "testo": "c", "tempo": x["inizio"] - 100}, {**base, "testo": "d"}]
+    mappa = tempo.rimappa(reg, 2_000_000_000.0)
+    sposta = mappa["sposta"]
+    ora = {l.log_record.body: l.log_record.timestamp for l in tempo.log_in_otlp(reg, mappa)}
+    assert abs(ora["a"] - (meta + sposta) * 1e9) < 1e3  # l'orario registrato, spostato come gli span
+    assert abs(ora["b"] - (x["fine"] + sposta) * 1e9) < 1e3  # fuori dallo span: portato al suo limite
+    assert abs(ora["c"] - (x["inizio"] + sposta) * 1e9) < 1e3
+    assert abs(ora["d"] - ((x["inizio"] + sposta) * 1e9 + 3_000_000)) < 1e3  # senza orario: l'inizio piu' un ms per posto
+
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):

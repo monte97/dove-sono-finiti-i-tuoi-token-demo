@@ -154,6 +154,9 @@ def test_strato_3_log_correlati_agli_span_degli_strumenti():
         assert r["span"] == id_span[nome] and len(r["span"]) == 16 and len(r["trace"]) == 32
     assert "leggi_avvisi: 40 pagine, 400 avvisi, filtro nessuno" in per_testo["leggi_avvisi"]["testo"]
     assert "leggi_programma: Kubernetes da zero dal programma pubblicato il 4/11 alle 18:00" in per_testo["leggi_programma"]["testo"]
+    for r in reg["log_otel"]:  # l'orario del record, in epoch secondi, dentro lo span a cui appartiene
+        x = next(x for x in reg["span"] if x["id"] == r["span"])
+        assert x["inizio"] <= r["tempo"] <= x["fine"]
     assert "log con contesto" in fuori and "[execute_tool leggi_avvisi]" in fuori
     assert len(s.LOG.handlers) == 1  # un solo handler, non uno per run
     corri(3)

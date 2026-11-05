@@ -492,7 +492,7 @@ def log_in_dict(r) -> dict:
     """Un record di log con il contesto che l'handler gli ha messo: trace e span dello span corrente."""
     lr = r.log_record
     return {"trace": format(lr.trace_id, "032x"), "span": format(lr.span_id, "016x"),
-            "livello": lr.severity_text, "testo": lr.body}
+            "livello": lr.severity_text, "testo": lr.body, "tempo": lr.timestamp / 1e9}  # epoch in secondi, come inizio e fine degli span
 
 
 def esegui(guasto: bool, cartella: Path, client=None) -> dict:

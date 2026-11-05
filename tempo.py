@@ -62,9 +62,10 @@ def in_otlp(r: dict, cartella: str, adesso: float, mappa: dict | None = None) ->
 
 
 def log_in_otlp(r: dict, mappa: dict) -> list[ReadableLogRecord]:
-    """I log correlati della registrazione, con gli id rimappati come quelli degli span. I record non hanno un orario
-    proprio: ognuno prende l'inizio (spostato) del suo span, piu' un millisecondo per posto, per tenere l'ordine.
-    Un log il cui span non e' nella registrazione si salta: non avrebbe una trace a cui appartenere."""
+    """I log correlati della registrazione, con gli id rimappati come quelli degli span. Ogni record porta il suo
+    orario (`tempo`, spostato come quello degli span); se manca (registrazioni senza il campo) prende l'inizio
+    spostato del suo span, piu' un millisecondo per posto, per tenere l'ordine. In ogni caso resta dentro lo span a
+    cui appartiene. Un log il cui span non e' nella registrazione si salta: non avrebbe una trace a cui appartenere."""
     per_id = {x["id"]: x for x in r["span"]}
     posto, fuori = {}, []
     for l in r.get("log_otel", []):
@@ -72,7 +73,9 @@ def log_in_otlp(r: dict, mappa: dict) -> list[ReadableLogRecord]:
         if x is None:
             continue
         n = posto[l["span"]] = posto.get(l["span"], -1) + 1
-        ora = round((x["inizio"] + mappa["sposta"]) * 1e9) + n * 1_000_000
+        da, a = (x["inizio"] + mappa["sposta"]) * 1e9, (x["fine"] + mappa["sposta"]) * 1e9
+        grezzo = (l["tempo"] + mappa["sposta"]) * 1e9 if "tempo" in l else da + n * 1_000_000
+        ora = round(min(max(grezzo, da), a))
         numero = {"WARNING": SeverityNumber.WARN, "ERROR": SeverityNumber.ERROR, "DEBUG": SeverityNumber.DEBUG}.get(
             l["livello"], SeverityNumber.INFO)
         fuori.append(ReadableLogRecord(

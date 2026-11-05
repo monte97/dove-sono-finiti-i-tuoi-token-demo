@@ -1,70 +1,105 @@
 # Osservare a strati
 
 La demo del talk «Dove sono finiti i tuoi token? Tracciare un sistema multi-agente con OpenTelemetry»
-(DevFest Alps 2026, Torino). Un assistente a tre agenti dà una risposta sbagliata con `200 OK`, e la si
-guarda con sei livelli di strumentazione: ogni strato aggiunge poche righe di codice e mostra qualcosa in più
-della stessa risposta.
+(DevFest Alps 2026, Torino). Un assistente a cinque agenti risponde a una domanda semplice con un orario
+sbagliato e un `200 OK`, e lo si guarda con sei livelli di strumentazione: ogni strato aggiunge poche righe di
+codice e mostra qualcosa in più della stessa risposta.
 
 Il caso è costruito e il guasto è messo apposta. Le decisioni del modello no: quelle sono registrate da run
 vere con Claude Haiku 5.5.
 
+## Il criterio
+
+Nessun componente sbaglia rispetto al proprio contratto: niente retry, fallback, eccezioni o attese messi
+apposta. Nessun componente ha un indizio locale che qualcosa sia andato storto, quindi non c'è un flag da
+propagare. La causa sta nella composizione dei rami, e si vede solo guardandoli insieme nella stessa trace.
+
 ## Il caso
 
-`coordina` riceve la domanda dell'utente e ha due strumenti, che sono agenti: `cerca` legge il programma
-dell'evento con lo strumento `leggi_programma`, `valida` controlla la risposta prima che arrivi all'utente.
-Chi chiamare, in che ordine, quante volte e con quali parole lo decide il modello. Nel codice nessuna riga
-dice «riprova» né «richiama `cerca`»: il ciclo dell'agente è scritto a mano proprio per vederlo.
+DevFest Immaginario 2026. Giulia Rossi (giulia.rossi@example.com) chiede: «A che ora è il workshop Kubernetes
+da zero?». Il programma, pubblicato ieri sera, dice oggi alle 15:00 in sala B. Stamattina la sala B è stata
+chiusa dalle 15:00 per manutenzione e le sessioni del pomeriggio in sala B iniziano un'ora prima. Lo sa solo un
+avviso, e l'avviso parla della sala B senza nominare il workshop. La risposta giusta, in quella giornata, è 14:00.
 
-Il guasto: con `--guasto` il servizio del programma va in timeout dopo 2 secondi, lo strumento apre un
-interruttore e per 120 secondi serve l'ultima copia, di 26 ore prima. Il workshop è stato spostato alle 14:00,
-la copia dice 15:00. L'età della copia sta solo sullo span `cache.read`, mai in quello che vede un modello.
+Le giornate sono due:
 
-Un secondo dominio, `--dominio freeze`, usa lo stesso codice e lo stesso guasto per una domanda più costosa da
-sbagliare: si può fare adesso il deploy del servizio pagamenti, durante il freeze del Black Friday?
+- `sana`, la giornata tranquilla: 3 pagine di avvisi, nessuno sulla sala B. Risposta giusta: 15:00.
+- `guasto`, la giornata piena (`--guasto`): 40 pagine di avvisi plausibili, con quello sulla sala B a metà.
+  Risposta giusta: 14:00. Il sistema risponde 15:00.
+
+Gli agenti sono cinque. `coordina` è l'orchestratore e ha come strumenti gli altri quattro:
+
+| agente | cosa fa |
+|---|---|
+| `programma` | `leggi_programma`: giorno, ora e sala dal programma pubblicato |
+| `sale` | `leggi_sale`: sala, piano e capienza dal database delle sale, senza orario |
+| `avvisi` | `leggi_avvisi`: tutte le comunicazioni di oggi, tutte le pagine in una chiamata. Deve riportare in al massimo tre righe quelle più importanti per la richiesta |
+| `valida` | controlla la risposta contro il contesto che riceve; consiglia, non impone |
+
+Chi chiamare, in che ordine e con quali parole lo decide il modello. Quando chiede più strumenti nello stesso
+giro, girano in parallelo. Qui sta la causa: `avvisi` riceve una richiesta sul workshop, non sa che è in sala B,
+e l'avviso sulla sala B per lui è uno fra tanti. Non lo riporta. `coordina` compone «15:00, sala B» e `valida`
+approva. Nessuno ha sbagliato, e i token in ingresso stanno quasi tutti in `avvisi`.
 
 ## Gli strati
 
 | strato | cosa si accende |
 |---|---|
-| 0 | niente OpenTelemetry: una riga di log e la fattura (la somma dell'usage) |
-| 1 | la strumentazione nativa dell'SDK Anthropic (`open_telemetry=`) |
-| 2 | gli span `invoke_workflow`, `invoke_agent` e gli archi fra agenti (`execute_tool cerca`, `execute_tool valida`), scritti a mano |
-| 3 | lo span `execute_tool` dello strumento: argomenti, risultato, timeout |
-| 4 | lo span `cache.read`: età e motivo della copia |
-| 5 | `content_mode: "content"`: messaggi e riassunto del ragionamento negli span |
+| 0 | oggi: una riga di log e la fattura (la somma dell'usage), niente OpenTelemetry |
+| 1 | l'SDK: la strumentazione nativa di Anthropic (`open_telemetry=`) |
+| 2 | gli agenti: gli span `invoke_workflow`, `invoke_agent` e gli archi fra agenti, scritti a mano, con il contesto propagato ai thread dei rami paralleli |
+| 3 | lo strumento: lo span `execute_tool` con argomenti e risultato, più i log correlati: le righe di `logging` dello strumento escono con `trace_id` e `span_id` |
+| 4 | i dati letti: da dove viene il dato e quanto. Per `leggi_programma` la data di pubblicazione, per `leggi_avvisi` pagine e avvisi letti, filtro usato e ora dell'ultimo aggiornamento |
+| 5 | il contenuto: `content_mode: "content"`, messaggi e riassunto del ragionamento negli span |
 
 Ogni strato contiene i precedenti. Le righe che esistono solo per osservare finiscono con un marcatore
-(`# s3`): `strati.py --righe` le conta, `strati.py --codice N` stampa quelle dello strato N.
+(`# s3`): `strati.py --righe` le conta, `strati.py --codice N` stampa quelle dello strato N. Gli attributi
+senza una convenzione OpenTelemetry hanno un prefisso proprio (`avvisi.pagine`, `programma.pubblicato_il`).
+
+Un fatto dell'SDK `anthropic` 1.15.0, verificato il 5/11/2026 su `_tracing.py`: il contenuto esce solo come
+attributi di span (`gen_ai.input.messages`, `gen_ai.output.messages`). Non ci sono eventi, né log, né metriche.
+Per questo i log correlati dello strato 3 sono quelli dello strumento, non quelli dell'SDK.
 
 ## Rigiocare le run, senza chiave
 
-Tutte le run del talk sono in `registrazioni/`, e si rigiocano senza chiamare l'API. Il replay mostra solo
-quello che lo strato di quella run aveva catturato.
+Le run si rigiocano senza chiamare l'API: il replay mostra solo quello che lo strato di quella run aveva
+catturato.
 
 ```bash
 python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python strati.py --replay registrazioni/strato-0/20261103-084248-guasto.json   # log 200 e fattura
-.venv/bin/python strati.py --replay registrazioni/strato-1/20261103-085844-guasto.json   # sette trace scollegate
-.venv/bin/python strati.py --replay registrazioni/strato-2/20261103-091541-guasto.json   # una trace, il grafo, il buco
-.venv/bin/python strati.py --replay registrazioni/strato-5/20261103-083955-guasto.json   # tutto, ragionamento compreso
-.venv/bin/python strati.py --replay registrazioni/strato-5/20261103-084022-guasto.json   # stessa domanda, altro albero
+.venv/bin/python strati.py --replay registrazioni/strato-N/<file>.json    # una registrazione
 ```
+
+Le registrazioni nel formato di questa versione (con il campo `log_otel`) escono dal banco qui sotto. Le
+cartelle che oggi stanno in `registrazioni/` sono quelle del sistema precedente e le misure nuove non le
+leggono. Finché il banco non è stato rifatto, i numeri di questa versione non esistono: le righe della tabella
+in `docs/banco-rami-paralleli.md` sono segnate `[banco]`.
 
 ## Le misure
 
-Una run non basta: il comportamento di un agente è una distribuzione. Le registrazioni sono un banco di 30 run
-per strato e per caso, girato il 3/11/2026 sul modello e sull'SDK fissati in `requirements.txt` (tag
-`banco-2026-11-06`).
+Una run non basta: il comportamento di un agente è una distribuzione. Il banco è di 30 run per strato e per
+caso.
 
 ```bash
 .venv/bin/python strati.py --riepilogo        # una riga per cartella e modo: risposte sbagliate, tempi, token, costo
-.venv/bin/python strati.py --misure 5         # riprove, alberi, approvazioni di valida, cosa arriva a valida
-.venv/bin/python segnali.py registrazioni/strato-5 registrazioni/strato-5-correzione   # i cinque segnali, dai soli span
+.venv/bin/python strati.py --misure 5         # rami nello stesso giro, cosa riporta avvisi, verdetti di valida, token per agente
+.venv/bin/python segnali.py registrazioni/strato-5 registrazioni/strato-5-correzione   # i segnali, dai soli span
 ```
 
-`segnali.py` calcola i cinque segnali di «Lunedì, in produzione» leggendo solo gli span, come farebbe un
-backend: le richieste che chiamano uno strumento più di una volta, le forme dell'albero, quanto spesso `valida`
-approva, le risposte nate da una copia vecchia, il costo per richiesta alla mediana e al 95° percentile.
+`segnali.py` calcola i segnali di «Lunedì, in produzione» leggendo solo gli span, come farebbe un backend: la
+forma dell'albero, il costo per richiesta alla mediana e al 95° percentile, la quota di `avvisi` sui token, le
+pagine di avvisi lette, quanto spesso `valida` approva.
+
+## La correzione
+
+Due passi, da misurare uno dopo l'altro:
+
+- `--correzione`: solo istruzioni a `coordina`, che deve chiedere ad `avvisi` le comunicazioni sulla sala della
+  sessione dopo averla saputa. I rami non sono più tutti nello stesso giro.
+- `--correzione-completa`: in più `leggi_avvisi` ha un parametro obbligatorio `sala` e restituisce solo gli
+  avvisi di quella sala, una pagina.
+
+Si guardano correttezza e token. Una volta vista la causa, la correzione è banale.
 
 ## Il cruscotto
 
@@ -74,7 +109,7 @@ Le porte stanno fuori da 3000, 3100, 3200 e 4317/4318: Grafana su 3377, Tempo su
 
 ```bash
 docker compose -f cruscotto/compose.yaml up -d
-.venv/bin/python tempo.py registrazioni/strato-5 registrazioni/strato-5-correzione   # le registrazioni, come appena finite
+.venv/bin/python tempo.py registrazioni/strato-5 registrazioni/strato-5-correzione   # span e log, come appena finiti
 .venv/bin/python verifica_cruscotto.py registrazioni/strato-5 registrazioni/strato-5-correzione   # cruscotto contro segnali.py
 open "http://localhost:3377/d/segnali?var-cartella=strato-5&var-modo=guasto"
 ```
@@ -82,48 +117,66 @@ open "http://localhost:3377/d/segnali?var-cartella=strato-5&var-modo=guasto"
 Le metriche TraceQL contano span, non richieste: per questo ogni richiesta porta i suoi fatti sullo span in
 cima, `invoke_workflow` (`richiesta.forma`, `richiesta.costo_microusd`, `richiesta.quota_avvisi_pct`,
 `richiesta.pagine_avvisi`). Il cruscotto guarda l'ultima ora, e `tempo.py` sposta gli orari delle registrazioni
-ad adesso: dopo un'ora si rimandano. `banco.cartella` e `banco.modo` servono solo a filtrare le run della demo.
+ad adesso, log compresi (ogni log tiene il proprio orario, dentro il suo span): dopo un'ora si rimandano.
+`banco.cartella` e `banco.modo` servono solo a filtrare le run della demo.
 
-## Rifare le run
+## Rifare le run e il banco
 
-Servono una chiave Anthropic e qualche centesimo: una run costa circa un millesimo di dollaro.
+Servono una chiave Anthropic e un po' di spesa. Il costo reale di ogni run è nella sua fattura, dentro la
+registrazione, e `--riepilogo` stampa la somma. Per tutto il banco il tetto indicativo è 5 $.
 
 ```bash
 echo "ANTHROPIC_API_KEY=..." > .env
 .venv/bin/python strati.py --strato 3 --guasto                      # una run, stampata come il replay
 .venv/bin/python strati.py --strato 5 --guasto --banco 10           # dieci run, una riga ciascuna
-.venv/bin/python strati.py --strato 5 --dominio freeze --guasto     # il secondo dominio
-.venv/bin/python strati.py --strato 5 --correzione                  # lo strumento dice quanto è vecchio il dato
-.venv/bin/python strati.py --strato 5 --correzione-completa         # ...e valida sa cosa farne
+.venv/bin/python strati.py --strato 5 --correzione                  # il primo passo della correzione
+.venv/bin/python strati.py --strato 5 --correzione-completa         # ...e il secondo
 .venv/bin/python strati.py --strato 5 --guasto --maschera           # uno SpanProcessor toglie l'email dagli span
 .venv/bin/python strati.py --strato 5 --guasto --otlp http://localhost:4418/v1/traces   # dal vivo verso il cruscotto
-.venv/bin/python controllo.py --run 10        # poche run per caso, confrontate con il banco
 ```
 
-Le run nuove finiscono in `registrazioni/` accanto al banco; `controllo.py` usa una cartella sua.
+Il banco completo, 30 run per modo (`sana`, `guasto`, `correzione`, `correzione completa`) e per strato:
 
-## Le registrazioni
+```bash
+for N in 0 1 2 3 4 5; do
+  .venv/bin/python strati.py --strato $N --banco 30
+  .venv/bin/python strati.py --strato $N --guasto --banco 30
+  .venv/bin/python strati.py --strato $N --correzione --banco 30
+  .venv/bin/python strati.py --strato $N --correzione-completa --banco 30
+done
+```
 
-`registrazioni/strato-N` più il dominio (`-freeze`), la correzione (`-correzione`, `-correzione-completa`) e la
-maschera (`-maschera`). Prima di salvare, e di stampare, `anthropic.organization.id`, `anthropic.workspace.id` e
+Ogni run finisce in `registrazioni/strato-N` più il suffisso del caso (`-correzione`, `-correzione-completa`,
+`-maschera`). Prima di salvare, e di stampare, `anthropic.organization.id`, `anthropic.workspace.id` e
 `anthropic.request.id` diventano `"oscurato"`. Le registrazioni dello strato 5 contengono prompt, risposte e
 riassunto del ragionamento, e quindi l'email dell'utente (qui finta): in un sistema vero il contenuto va
-filtrato prima che esca dal processo.
+filtrato prima che esca dal processo. Quali righe del banco alimentano quali numeri sta in
+`docs/banco-rami-paralleli.md`.
 
-`archivio/2026-10-28/` contiene le run di una versione precedente, da cui vengono le citazioni della prima
-stesura del talk; i test di `test_segnali.py` leggono quelle, così i loro numeri restano fermi.
+Il controllo della settimana del talk fa poche run per caso in una cartella sua e le confronta con il banco:
+
+```bash
+.venv/bin/python controllo.py --stima               # cosa lancerebbe e quanto costa, senza chiamare l'API
+.venv/bin/python controllo.py --run 10              # dieci run per caso, poi il confronto
+.venv/bin/python controllo.py --confronta controllo/AAAA-MM-GG
+```
 
 ## Cosa questa demo non dice
 
 - Le convenzioni GenAI di OpenTelemetry sono sperimentali: i nomi possono cambiare. L'SDK di Anthropic le usa a
   metà (lo span si chiama `anthropic.messages.create`, il motivo di fine sta in `anthropic.message.stop_reason`).
 - Il costo è una stima: token per listino di Claude Haiku 5.5, letto il 23/10/2026. La fattura vera arriva dopo.
-- L'interruttore vive dentro la singola richiesta, così ogni run paga il timeout. In produzione sarebbe
-  condiviso: dopo il primo timeout le altre richieste leggerebbero la copia senza nessun sintomo nei token, e
-  resterebbe acceso solo `cache.read`.
 - `claude-haiku-5-5` è un alias senza snapshot datato: lo stesso nome può indicare un modello diverso domani.
   `controllo.py` serve a vedere se i numeri si sono spostati.
-- La demo non usa la cache del provider: ogni giro rilegge tutto a prezzo pieno.
+- Che i tre rami girino nello stesso giro lo decide il modello. Il banco misura quanto spesso succede, e il
+  guasto dipende da quello.
+- La demo non usa il prompt caching del provider: ogni giro rilegge tutto a prezzo pieno.
+
+## Il sistema precedente
+
+La versione con tre agenti in fila (una sola fonte che serviva un dato vecchio) sta nel tag
+git `tre-agenti-in-fila`, con le sue registrazioni. La pipeline fissa, la variante in cui un agente chiama
+l'altro come strumento e il tool runner dell'SDK stanno nel tag `spike-a-b`.
 
 ## L'orchestratore e le convenzioni
 
@@ -133,14 +186,11 @@ lo span `execute_tool {agente}` del chiamante, con `gen_ai.agent.name` del chiam
 `gen_ai.transfer.mode = return_to_caller` e `gen_ai.transfer.target.name`, e dentro lo span `invoke_agent` del
 chiamato.
 
-La pipeline fissa (il passaggio da `cerca` a `valida` scritto nel codice), la variante in cui `cerca` chiama
-`valida` come strumento e il tool runner dell'SDK sono nel tag git `spike-a-b`, con le loro registrazioni.
-
 ## Test
 
 ```bash
-.venv/bin/python test_strati.py     # controlli senza rete
-.venv/bin/python test_segnali.py    # i segnali, sulle registrazioni e su run finte
+.venv/bin/python test_strati.py     # controlli senza rete, contro un server finto
+.venv/bin/python test_segnali.py    # i segnali, il cruscotto e il rimando a Tempo, su run finte
 ```
 
 ## Chi l'ha scritta
