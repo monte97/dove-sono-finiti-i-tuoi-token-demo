@@ -32,18 +32,22 @@ import argparse
 import contextvars  # s2
 import datetime as dt
 import json
+import logging
 import random
 import re
 import statistics
 import textwrap
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
 from opentelemetry import trace
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler  # s3
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor  # s3
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -89,6 +93,42 @@ def senza_email(v):  # s5
     if isinstance(v, str):  # s5
         return EMAIL.sub("[email]", v)  # s5
     return tuple(senza_email(x) for x in v) if isinstance(v, (list, tuple)) else v  # s5
+
+
+# l'handler dell'SDK 1.44 avvisa che e' deprecato (a favore di opentelemetry-instrumentation-logging): lo usiamo apposta
+warnings.filterwarnings("ignore", message="`LoggingHandler` in", category=DeprecationWarning)
+LOG = logging.getLogger("osservare-a-strati")  # i log come li scrive gia' un team: codice applicativo
+LOG.setLevel(logging.INFO)
+memoria_log = InMemoryLogRecordExporter()  # s3  come `memoria`, per i log; dal vivo OTLP verso un backend
+_handler = None
+
+
+def processore_otlp_log(url: str):
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    return BatchLogRecordProcessor(OTLPLogExporter(endpoint=url))
+
+
+def url_log(url: str) -> str:
+    """Dove vanno i log via OTLP: lo stesso host degli span, path /v1/logs."""
+    return (url[:-len("/v1/traces")] if url.endswith("/v1/traces") else url.rstrip("/")) + "/v1/logs"
+
+
+def fai_log():
+    """Collega il logging di Python a OpenTelemetry: ogni riga esce col trace_id e lo span_id dello span corrente.
+    Un solo handler alla volta: quello della run precedente viene tolto."""
+    global _handler
+    if _handler:
+        LOG.removeHandler(_handler)
+        _handler = None
+    if STRATO < 3:
+        return
+    provider = LoggerProvider()  # s3
+    provider.add_log_record_processor(SimpleLogRecordProcessor(memoria_log))  # s3
+    if OTLP:
+        provider.add_log_record_processor(processore_otlp_log(url_log(OTLP)))
+    _handler = LoggingHandler(logger_provider=provider)  # s3
+    LOG.addHandler(_handler)  # s3
 
 
 memoria = InMemorySpanExporter()  # s1  ponytail: in memoria; dal vivo un exporter OTLP verso un backend
@@ -143,6 +183,7 @@ DOMANDA = ("Ciao, sono Giulia Rossi (giulia.rossi@example.com). "
 # Il programma pubblicato ieri sera. Stamattina la sala B e' stata chiusa dalle 15:00 e le sessioni del
 # pomeriggio in sala B iniziano un'ora prima: lo dice solo un avviso, che non nomina il workshop.
 PUBBLICATO = "4/11 alle 18:00"
+AVVISI_AGGIORNATI = "5/11 alle 09:40"  # l'ultimo aggiornamento della bacheca avvisi
 PROGRAMMA = {"Kubernetes da zero": {"giorno": "oggi", "ora": "15:00", "sala": "B"},
              "OpenTelemetry in un'ora": {"giorno": "oggi", "ora": "11:00", "sala": "A"},
              "Rust per chi scrive Go": {"giorno": "domani", "ora": "16:30", "sala": "C"}}
@@ -300,17 +341,40 @@ def _trova(tabella: dict, chiave: str):
     return k, (tabella[k] if k else {"errore": "non trovato", "disponibili": list(tabella)})
 
 
+# Attributi inventati, con prefisso proprio (le convenzioni semantiche non li coprono):
+#   programma.pubblicato_il   quando e' stato pubblicato il programma letto
+#   sale.fonte                da dove viene il dato sulle sale
+#   avvisi.pagine             pagine di avvisi restituite al modello
+#   avvisi.letti              avvisi restituiti al modello
+#   avvisi.filtro             "nessuno" oppure la sala richiesta
+#   avvisi.aggiornati_alle    ora dell'ultimo aggiornamento della bacheca
 def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
     """Lo strumento che legge un dato. Niente e' rotto: ognuno risponde correttamente a cio' che gli si chiede."""
     if nome == "leggi_programma":
-        return json.dumps(_trova(PROGRAMMA, argomenti.get("sessione", ""))[1], ensure_ascii=False)
+        sessione = argomenti.get("sessione", "")
+        LOG.info("leggi_programma: %s dal programma pubblicato il %s", sessione, PUBBLICATO)
+        if STRATO >= 4:  # s4
+            trace.get_current_span().set_attribute("programma.pubblicato_il", PUBBLICATO)  # s4
+        return json.dumps(_trova(PROGRAMMA, sessione)[1], ensure_ascii=False)
     if nome == "leggi_sale":
-        k, dato = _trova(SESSIONE_SALA, argomenti.get("sessione", ""))
+        sessione = argomenti.get("sessione", "")
+        LOG.info("leggi_sale: %s dal database delle sale", sessione)
+        if STRATO >= 4:  # s4
+            trace.get_current_span().set_attribute("sale.fonte", "database delle sale")  # s4
+        k, dato = _trova(SESSIONE_SALA, sessione)
         return json.dumps(SALE[dato] if k else dato, ensure_ascii=False)
     voci = [v for pagina in avvisi(stato["piena"]) for v in pagina]  # tutte le pagine, in una sola chiamata
+    filtro = "nessuno"
     if CORREZIONE >= 2:
         sala = argomenti.get("sala", "").strip().upper()
         voci = [v for v in voci if v.startswith(f"Sala {sala}:")]
+        filtro = f"sala {sala}"
+    pagine = -(-len(voci) // AVVISI_PER_PAGINA)
+    LOG.info("leggi_avvisi: %d pagine, %d avvisi, filtro %s", pagine, len(voci), filtro)
+    if STRATO >= 4:  # s4
+        trace.get_current_span().set_attributes({"avvisi.pagine": pagine, "avvisi.letti": len(voci),  # s4
+                                                 "avvisi.filtro": filtro,  # s4
+                                                 "avvisi.aggiornati_alle": AVVISI_AGGIORNATI})  # s4
     return "\n".join(f"- {v}" for v in voci) or "Nessun avviso."
 
 
@@ -393,8 +457,10 @@ def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, stru
 
 def cliente(**prova):
     if STRATO == 0:
+        fai_log()
         return anthropic.Anthropic(open_telemetry=False, **prova)
     provider = fai_provider(MASCHERA)
+    fai_log()  # s3
     modo = "metadata_only"  # s1
     if STRATO >= 5:  # s5
         modo = "content"  # s5
@@ -417,8 +483,16 @@ def in_dict(s) -> dict:
             "errore": s.status.status_code == StatusCode.ERROR, "attributi": attributi}
 
 
+def log_in_dict(r) -> dict:
+    """Un record di log con il contesto che l'handler gli ha messo: trace e span dello span corrente."""
+    lr = r.log_record
+    return {"trace": format(lr.trace_id, "032x"), "span": format(lr.span_id, "016x"),
+            "livello": lr.severity_text, "testo": lr.body}
+
+
 def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     memoria.clear()
+    memoria_log.clear()
     client = client or cliente()
     stato = {"piena": guasto, "fattura": [], "lock": threading.Lock()}
     inizio = time.monotonic()  # s0
@@ -436,9 +510,10 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
            "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
-                       "cache": sum(x.cache_read_input_tokens or 0 for x in u),
-                       "out": sum(x.output_tokens for x in u)},
-           "secondi": secondi, "span": [in_dict(s) for s in memoria.get_finished_spans()]}
+                       "cache": sum(x.cache_read_input_tokens or 0 for x in u),  # s0
+                       "out": sum(x.output_tokens for x in u)},  # s0
+           "secondi": secondi, "span": [in_dict(s) for s in memoria.get_finished_spans()],
+           "log_otel": [log_in_dict(r) for r in memoria_log.get_finished_logs()]}
     cartella.mkdir(parents=True, exist_ok=True)
     (cartella / f"{ora:%Y%m%d-%H%M%S}-{reg['modo']}.json").write_text(json.dumps(reg, ensure_ascii=False, indent=1))
     return reg
@@ -578,6 +653,11 @@ def mostra(reg: dict, registrata: bool = False):
           f"$ {costo(f['in'], f['cache'], f['out']):.6f}")
     if not span:
         return
+    if reg.get("log_otel"):
+        print(c("grigio", "\nlog con contesto:"))
+        nomi_span = {s["id"]: s["nome"] for s in span}
+        for r in reg["log_otel"]:
+            print(f"  {r['livello']:<5} {r['testo']}" + c("grigio", f"  [{nomi_span.get(r['span'], '?')}]"))
     tracce = per_trace(span)
     print(c("grigio", f"\n{len(tracce)} trace per questa richiesta · {len(span)} span\n"))
     t0 = min(x["inizio"] for x in span)

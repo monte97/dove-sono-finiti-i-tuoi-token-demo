@@ -12,6 +12,7 @@ import httpx2 as httpx
 import segnali as sg
 import strati as s
 from opentelemetry import trace
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.trace import TracerProvider
 
 CARTELLA = Path(tempfile.mkdtemp())
@@ -139,9 +140,67 @@ def test_strato_3_gli_strumenti_con_argomenti_e_risultato():
     assert all(not x["errore"] for x in reg["span"])  # nessun componente sbaglia
 
 
-def test_strato_4_ancora_niente_provenienza():
+def span_di(reg, nome):
+    return next(x for x in reg["span"] if x["nome"] == nome)
+
+
+def test_strato_3_log_correlati_agli_span_degli_strumenti():
+    reg, fuori = corri(3)
+    traccia = reg["span"][0]["trace"]
+    id_span = {n: span_di(reg, f"execute_tool {n}")["id"] for n in ("leggi_programma", "leggi_sale", "leggi_avvisi")}
+    assert len(reg["log_otel"]) == 3 and all(r["trace"] == traccia and r["livello"] == "INFO" for r in reg["log_otel"])
+    per_testo = {r["testo"].split(":")[0]: r for r in reg["log_otel"]}  # scritti da thread diversi, ordine libero
+    for nome, r in per_testo.items():
+        assert r["span"] == id_span[nome] and len(r["span"]) == 16 and len(r["trace"]) == 32
+    assert "leggi_avvisi: 40 pagine, 400 avvisi, filtro nessuno" in per_testo["leggi_avvisi"]["testo"]
+    assert "leggi_programma: Kubernetes da zero dal programma pubblicato il 4/11 alle 18:00" in per_testo["leggi_programma"]["testo"]
+    assert "log con contesto" in fuori and "[execute_tool leggi_avvisi]" in fuori
+    assert len(s.LOG.handlers) == 1  # un solo handler, non uno per run
+    corri(3)
+    assert len(s.LOG.handlers) == 1 and len(corri(3)[0]["log_otel"]) == 3  # non si accumulano fra le run
+
+
+def test_sotto_lo_strato_3_i_log_non_hanno_contesto():
+    for n in (0, 1, 2):
+        reg, fuori = corri(n)
+        assert reg["log_otel"] == [] and "log con contesto" not in fuori and s.LOG.handlers == []
+
+
+def test_strato_4_da_dove_viene_il_dato_e_quanto():
     reg, _ = corri(4)
-    assert sorted(nomi(reg)) == sorted(nomi(corri(3)[0]))  # (i rami paralleli si chiudono in ordine libero) lo strato 4 aggiunge attributi (da fare), non span
+    assert sorted(nomi(reg)) == sorted(nomi(corri(3)[0]))  # lo strato 4 aggiunge attributi, non span
+    assert attributi(reg, "execute_tool leggi_programma")["programma.pubblicato_il"] == "4/11 alle 18:00"
+    assert attributi(reg, "execute_tool leggi_sale")["sale.fonte"] == "database delle sale"
+    a = attributi(reg, "execute_tool leggi_avvisi")
+    assert (a["avvisi.pagine"], a["avvisi.letti"], a["avvisi.filtro"]) == (40, 400, "nessuno")
+    assert a["avvisi.aggiornati_alle"] == s.AVVISI_AGGIORNATI
+    for nome in ("leggi_programma", "leggi_sale", "leggi_avvisi"):  # sotto lo strato 4 non ci sono
+        assert not any(k.split(".")[0] in ("programma", "sale", "avvisi") for k in attributi(corri(3)[0], f"execute_tool {nome}"))
+    reg, _ = corri(4, guasto=False)
+    assert attributi(reg, "execute_tool leggi_avvisi")["avvisi.pagine"] == 3
+
+
+def test_strato_4_con_il_filtro_per_sala():
+    try:
+        s.CORREZIONE = 2
+        reg, _ = corri(4)
+    finally:
+        s.CORREZIONE = 0
+    a = attributi(reg, "execute_tool leggi_avvisi")
+    assert (a["avvisi.pagine"], a["avvisi.letti"], a["avvisi.filtro"]) == (1, 1, "sala B")
+    assert any("filtro sala B" in r["testo"] for r in reg["log_otel"])
+
+
+def test_righe_dei_nuovi_strati():
+    codice3, codice4 = s.codice(3), s.codice(4)
+    assert "LoggingHandler" in codice3 and "LoggingHandler" not in codice4
+    assert "avvisi.pagine" in codice4 and "avvisi.pagine" not in codice3
+    assert "LOG.info" not in codice3 + codice4  # il logging e' codice applicativo, non si marca
+
+
+def test_url_dei_log_otlp():
+    assert s.url_log("http://tempo:4318/v1/traces") == "http://tempo:4318/v1/logs"
+    assert s.url_log("http://tempo:4318") == "http://tempo:4318/v1/logs"
 
 
 def test_strato_5_il_contenuto_e_l_email():
@@ -296,6 +355,9 @@ def test_codice_pulito():
     t = s.codice(3)
     assert 'span.set_attribute("gen_ai.tool.call.arguments"' in t and "if STRATO" not in t
     assert "\nspan.set_attribute(\"gen_ai.tool.call.arguments\"" in t  # il corpo dell'if perde il rientro
+    assert not any(b.startswith((" ", "\t")) for b in s.codice(0).split("\n...\n"))  # lo strato 0 esce a margine, senza il lock
+    assert "lock" not in s.codice(0) and 'stato["fattura"].append(r.usage)' in s.codice(0)
+    assert '"out": sum(x.output_tokens for x in u)},' in s.codice(0)  # il dizionario della fattura e' intero
     assert "cache.read" not in open(s.__file__).read()
 
 
@@ -362,11 +424,14 @@ def test_otlp_mascherato():
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     fuori, vero = InMemorySpanExporter(), s.processore_otlp
     s.processore_otlp = lambda url: SimpleSpanProcessor(fuori)  # al posto di Tempo
+    vero_log, urls = s.processore_otlp_log, []
+    s.processore_otlp_log = lambda url: (urls.append(url), SimpleLogRecordProcessor(InMemoryLogRecordExporter()))[1]
     s.OTLP, s.MASCHERA = "http://finto", True
     try:
         corri(5)
     finally:
-        s.processore_otlp, s.OTLP, s.MASCHERA = vero, None, False
+        s.processore_otlp, s.processore_otlp_log, s.OTLP, s.MASCHERA = vero, vero_log, None, False
+    assert urls == ["http://finto/v1/logs"]
     span = [s.in_dict(x) for x in fuori.get_finished_spans()]
     assert span and s.con_email(span) == 0  # l'email non esce dal processo neanche verso il backend
 
