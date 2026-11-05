@@ -19,6 +19,7 @@ Strati (ognuno contiene i precedenti):
 
   python strati.py --strato 3 --guasto             una run
   python strati.py --strato 3 --guasto --banco 5   cinque run, una riga ciascuna
+  python strati.py --strato 5 --correzione-dialogo avvisi puo' chiedere a programma (ricalcola la sala da solo)
   python strati.py --replay registrazioni/strato-3/<file>.json
   python strati.py --riepilogo                     una riga per strato e modo
   python strati.py --misure 5                      come ha deciso il grafo, cosa ha letto e riportato avvisi, token per agente
@@ -347,7 +348,8 @@ ISTRUZIONI = {
                  "risposta prima che arrivi all'utente. Per rispondere consulta programma, sale e avvisi; prima di "
                  "rispondere conviene far controllare la risposta da valida. Rispondi in una riga con giorno, ora, sala e piano."),
     "programma": ("Sei l'assistente del programma di DevFest Immaginario 2026. Per giorno, ora e sala di una sessione "
-                  "usa sempre lo strumento leggi_programma. Rispondi in una riga."),
+                  "usa sempre lo strumento leggi_programma; per il piano della sala chiedi all'agente sale. "
+                  "Rispondi in una riga con giorno, ora, sala e piano."),
     "sale": ("Sei l'assistente delle sale di DevFest Immaginario 2026. Per sala, piano e capienza usa sempre lo strumento "
              "leggi_sale. Rispondi in una riga."),
     "avvisi": ("Sei l'assistente delle comunicazioni di DevFest Immaginario 2026. Gli avvisi di oggi li leggi con lo "
@@ -356,7 +358,9 @@ ISTRUZIONI = {
     "valida": ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino all'utente. "
                "Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che l'orario sia valido, "
                "che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente alla domanda e coerente "
-               "con il contesto. Se va tutto bene, restituisci la risposta com'è aggiungendo in fondo «Verificato.». "
+               "con il contesto. Se hai un dubbio sul contesto, puoi ricontrollarlo alla fonte prima di approvare: "
+               "programma ti dice giorno, ora e sala di una sessione, avvisi le comunicazioni di oggi che la riguardano. "
+               "Se va tutto bene, restituisci la risposta com'è aggiungendo in fondo «Verificato.». "
                "Altrimenti spiega cosa non va."),
 }
 DESCRIZIONI = {
@@ -368,10 +372,14 @@ DESCRIZIONI = {
 }
 
 # La correzione: 1 solo istruzioni a coordina (chiedi gli avvisi della sala dopo averla saputa);
-# 2 in piu' leggi_avvisi vuole la sala e restituisce solo gli avvisi di quella sala.
+# 2 in piu' leggi_avvisi vuole la sala e restituisce solo gli avvisi di quella sala (include la 1);
+# 3 (dialogo) e' un'alternativa, non include la 1 ne' la 2: coordina e leggi_avvisi restano come nel guasto, ma
+# avvisi puo' chiedere a programma giorno, ora e sala di una sessione.
 CORREZIONE = 0
 CORREZIONE_COORDINA = " Quando conosci la sala della sessione, chiedi ad avvisi le comunicazioni su quella sala."
 CORREZIONE_AVVISI = " Lo strumento leggi_avvisi vuole la sala: usa quella indicata nella richiesta."
+CORREZIONE_DIALOGO = (" Se per capire quali avvisi riguardano la richiesta ti servono giorno, ora e sala di una sessione, "
+                      "puoi chiederli all'agente programma.")
 
 _VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
              "properties": {"domanda": {"type": "string", "description": "la domanda dell'utente"},
@@ -390,7 +398,7 @@ def _sala_schema() -> dict:
 
 
 def schemi() -> dict:
-    sala = CORREZIONE >= 2
+    sala = CORREZIONE == 2
     avvisi_tool = {"name": "leggi_avvisi", "input_schema": {"type": "object", "properties": {}},
                    "description": "Legge tutte le comunicazioni di oggi, tutte le pagine in una sola chiamata."}
     if sala:
@@ -410,14 +418,15 @@ def schemi() -> dict:
 
 def agenti_strumento() -> dict:
     """strumento -> (agente invocato, sue istruzioni, suoi strumenti)"""
-    return {"programma": ("programma", ISTRUZIONI["programma"], ["leggi_programma"]),
+    return {"programma": ("programma", ISTRUZIONI["programma"], ["leggi_programma", "sale"]),
             "sale": ("sale", ISTRUZIONI["sale"], ["leggi_sale"]),
-            "avvisi": ("avvisi", ISTRUZIONI["avvisi"] + (CORREZIONE_AVVISI if CORREZIONE >= 2 else ""), ["leggi_avvisi"]),
-            "valida": ("valida", ISTRUZIONI["valida"], [])}
+            "avvisi": ("avvisi", ISTRUZIONI["avvisi"] + (CORREZIONE_AVVISI if CORREZIONE == 2 else CORREZIONE_DIALOGO if CORREZIONE == 3 else ""),
+                       ["leggi_avvisi"] + (["programma"] if CORREZIONE == 3 else [])),
+            "valida": ("valida", ISTRUZIONI["valida"], ["programma", "avvisi"])}
 
 
 def istruzioni_coordina() -> str:
-    return ISTRUZIONI["coordina"] + (CORREZIONE_COORDINA if CORREZIONE >= 1 else "")
+    return ISTRUZIONI["coordina"] + (CORREZIONE_COORDINA if CORREZIONE in (1, 2) else "")
 
 
 PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del ragionamento torna solo se lo chiedi
@@ -461,7 +470,7 @@ def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
         return json.dumps({"errore": f"strumento sconosciuto: {nome}"}, ensure_ascii=False)
     voci = [v for pagina in avvisi(stato["piena"]) for v in pagina]  # tutte le pagine, in una sola chiamata
     filtro = "nessuno"
-    if CORREZIONE >= 2:
+    if CORREZIONE == 2:
         sala = sala_normale(argomenti.get("sala", ""))
         voci = [v for v in voci if v.startswith(f"Sala {sala}:")]
         filtro = f"sala {sala}"
@@ -477,7 +486,7 @@ def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
 def esegui_strumento(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict,
                      stato: dict) -> tuple[str, bool]:
     if nome in agenti_strumento():
-        return chiama_agente(client, chiamante, nome, id_chiamata, argomenti, stato), False
+        return chiama_agente(client, chiamante, nome, id_chiamata, argomenti, stato)
     with tracer(3).start_as_current_span(f"execute_tool {nome}") as span:  # s3
         span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": nome,  # s3
                              "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s3
@@ -492,7 +501,23 @@ def richiesta_di_verifica(argomenti: dict) -> str:
     return testo + (f"\nContesto: {argomenti['contesto']}" if argomenti.get("contesto") else "")
 
 
-def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict, stato: dict) -> str:
+# La catena di chiamata (chi ha chiamato chi, dalla radice) viaggia fuori dal prompt, in una variabile di contesto:
+# ogni thread parte da una copia (esegui_chiamate), quindi i rami paralleli non si pestano.
+CATENA = contextvars.ContextVar("catena", default=())
+PROFONDITA_MAX = 4  # chiamate fra agenti una dentro l'altra, a partire da coordina (coordina>valida>avvisi>programma>sale)
+
+
+def controlla_catena(nome: str, catena: tuple) -> str | None:
+    """None se `nome` puo' essere chiamato da chi ha `catena` (l'ultimo e' il chiamante); altrimenti il motivo,
+    che torna al modello come risultato dello strumento."""
+    if nome in catena:
+        return f"{nome} è già nella catena di chiamata ({' > '.join(catena)}): non puoi richiamarlo."
+    if len(catena) > PROFONDITA_MAX:
+        return f"catena di chiamata troppo profonda (massimo {PROFONDITA_MAX}): {' > '.join(catena)} > {nome}."
+    return None
+
+
+def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict, stato: dict) -> tuple[str, bool]:
     """Un agente usato come strumento: execute_tool del chiamante con dentro invoke_agent del chiamato.
 
     Semconv GenAI, refinement "Agent as a tool" (gen_ai.execute_tool.transfer.internal). Lo span del
@@ -506,11 +531,18 @@ def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti
                              "gen_ai.transfer.target.name": destinazione})  # s2
         if STRATO >= 3:  # s3  argomenti e risultato, come per gli strumenti dei dati
             span.set_attribute("gen_ai.tool.call.arguments", json.dumps(argomenti, ensure_ascii=False))  # s3
+        rifiuto = controlla_catena(destinazione, CATENA.get())
+        if rifiuto:  # un errore vero del modello, che il codice non nasconde: lo vede lui e lo vede lo span
+            span.set_status(StatusCode.ERROR, rifiuto)  # s2
+            span.set_attribute("error.type", "ciclo")  # s2
+            if STRATO >= 3:  # s3
+                span.set_attribute("gen_ai.tool.call.result", rifiuto)  # s3
+            return rifiuto, True
         richiesta = richiesta_di_verifica(argomenti) if destinazione == "valida" else argomenti.get("richiesta", "")
         risultato = agente(client, destinazione, istruzioni, richiesta, stato, strumenti)
         if STRATO >= 3:  # s3
             span.set_attribute("gen_ai.tool.call.result", risultato)  # s3
-        return risultato
+        return risultato, False
 
 
 def esegui_chiamate(client, nome: str, chiamate: list, stato: dict) -> list:
@@ -545,10 +577,14 @@ def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strum
 
 
 def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list) -> str:
-    with tracer(2).start_as_current_span(f"invoke_agent {nome}") as span:  # s2
-        span.set_attributes({"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": nome,  # s2
-                             "gen_ai.request.model": MODEL})  # s2
-        return ciclo(client, nome, istruzioni, richiesta, stato, strumenti)
+    segno = CATENA.set(CATENA.get() + (nome,))  # chi e' in corso, per la guardia contro i cicli
+    try:
+        with tracer(2).start_as_current_span(f"invoke_agent {nome}") as span:  # s2
+            span.set_attributes({"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": nome,  # s2
+                                 "gen_ai.request.model": MODEL})  # s2
+            return ciclo(client, nome, istruzioni, richiesta, stato, strumenti)
+    finally:
+        CATENA.reset(segno)
 
 
 def cliente(**prova):
@@ -838,6 +874,12 @@ def approva(testo: str) -> bool:
     return testo.rstrip(" \n\"'»*").endswith("Verificato.")
 
 
+# I thread di uno stesso giro partono a pochi millisecondi uno dall'altro: se uno strumento istantaneo (leggi_programma)
+# finisce prima che parta il fratello (un agente), sono comunque dello stesso giro. Un giro dopo, invece, parte dopo una
+# chiamata al modello (secondi).
+SCARTO_GIRO_S = 0.02
+
+
 def grafo(span) -> list[str]:
     """Chi ha chiamato che cosa, in una forma che non dipende da chi e' partito prima nei rami paralleli.
 
@@ -853,7 +895,8 @@ def grafo(span) -> list[str]:
         chiamate = sorted((x for x in figli.get(agente_span["id"], []) if e(x, "execute_tool")), key=lambda x: x["inizio"])
         gruppi = []
         for x in chiamate:
-            if gruppi and x["inizio"] < max(y["fine"] for y in gruppi[-1]):  # parte mentre una del giro e' ancora in corso
+            if gruppi and (x["inizio"] < max(y["fine"] for y in gruppi[-1])  # parte mentre una del giro e' ancora in corso
+                           or x["inizio"] - gruppi[-1][0]["inizio"] < SCARTO_GIRO_S):  # o subito dopo: uno strumento istantaneo
                 gruppi[-1].append(x)
             else:
                 gruppi.append([x])
@@ -879,7 +922,8 @@ def grafo(span) -> list[str]:
 
 # Le misure della giornata piena. Ognuna dice da quale strato in su gli span che servono esistono: sotto, None.
 MINIMO_MISURE = {"stesso_giro": 2, "dopo_sala": 2, "token": 2, "letto": 3, "riporta": 3, "verdetti": 3, "email_valida": 3,
-                 "pagine": 4}
+                 "pagine": 4, "sale_due": 2, "valida_rivede": 2, "valida_riporta": 3, "dialogo": 2, "dialogo_riporta": 3,
+                 "cicli": 2, "profondita_agenti": 2}
 AVVISI_SALA_B = re.compile(r"sala B", re.I)
 # la causa legata alla sala (non «chiusura» da sola: «keynote di chiusura» e' rumore)
 AVVISI_CAUSA = re.compile(r"\bchius[ao]\b|\bchiud\w+|manutenzion|un.ora prima|anticipat|"
@@ -918,10 +962,12 @@ def riporta_avviso(testo: str) -> bool:
     return False
 
 
-def archi(span, verso=None) -> list:
-    """Gli archi fra agenti (execute_tool con destinazione), in ordine di inizio, magari solo verso certi agenti."""
+def archi(span, verso=None, da=None) -> list:
+    """Gli archi fra agenti (execute_tool con destinazione), in ordine di inizio, magari solo verso certi agenti
+    e/o solo chiamati da un certo agente."""
     return sorted((x for x in span if attr(x, "gen_ai.operation.name") == "execute_tool"
-                   and attr(x, "gen_ai.transfer.target.name") and (verso is None or attr(x, "gen_ai.transfer.target.name") in verso)),
+                   and attr(x, "gen_ai.transfer.target.name") and (verso is None or attr(x, "gen_ai.transfer.target.name") in verso)
+                   and (da is None or attr(x, "gen_ai.agent.name") == da)),
                   key=lambda x: x["inizio"])
 
 
@@ -933,7 +979,7 @@ def strumenti(span, nome: str) -> list:
 def stesso_giro(span) -> bool:
     """programma, sale e avvisi sono partiti insieme: gli archi hanno lo stesso padre e si sovrappongono nel tempo."""
     primi = {}
-    for x in archi(span, ("programma", "sale", "avvisi")):
+    for x in archi(span, ("programma", "sale", "avvisi"), da="coordina"):  # le chiamate annidate non contano
         primi.setdefault(attr(x, "gen_ai.transfer.target.name"), x)
     tre = list(primi.values())
     return len(tre) == 3 and len({x["padre"] for x in tre}) == 1 and max(x["inizio"] for x in tre) < min(x["fine"] for x in tre)
@@ -941,8 +987,47 @@ def stesso_giro(span) -> bool:
 
 def avvisi_dopo_sala(span) -> bool:
     """avvisi e' stato chiamato quando programma o sale avevano gia' finito: coordina sapeva gia' la sala."""
-    precedenti = archi(span, ("programma", "sale"))
-    return any(p["fine"] <= a["inizio"] for a in archi(span, ("avvisi",)) for p in precedenti)
+    precedenti = archi(span, ("programma", "sale"), da="coordina")
+    return any(p["fine"] <= a["inizio"] for a in archi(span, ("avvisi",), da="coordina") for p in precedenti)
+
+
+def sale_da_due(span) -> bool:
+    """sale e' stato chiamato da due agenti diversi (coordina e programma): lo stesso dato letto per due strade."""
+    return len({attr(x, "gen_ai.agent.name") for x in archi(span, ("sale",))}) >= 2
+
+
+def figli_arco(span, arco):
+    """Gli archi che l'agente chiamato da `arco` ha chiamato a sua volta."""
+    dentro = {x["id"] for x in span if x["padre"] == arco["id"] and attr(x, "gen_ai.operation.name") == "invoke_agent"}
+    return [x for x in archi(span) if x["padre"] in dentro]
+
+
+def dialogo(span) -> bool:
+    """avvisi ha chiesto a programma (la correzione dialogo)."""
+    return bool(archi(span, ("programma",), da="avvisi"))
+
+
+def dialogo_riporta(span) -> bool:
+    """...e poi la sua risposta riporta l'avviso sulla sala B."""
+    return any(riporta_avviso(attr(a, "gen_ai.tool.call.result", "")) for a in archi(span, ("avvisi",))
+               if any(attr(f, "gen_ai.transfer.target.name") == "programma" for f in figli_arco(span, a)))
+
+
+def cicli(span) -> int:
+    """Quante volte la guardia ha rifiutato una chiamata (archi in errore con error.type ciclo)."""
+    return sum(attr(x, "error.type") == "ciclo" for x in archi(span))
+
+
+def profondita_agenti(span) -> int:
+    """Quanti agenti uno dentro l'altro, contando gli archi da coordina in giu': il ramo piu' lungo."""
+    per_id, fondo = {x["id"]: x for x in span}, 0
+    for a in archi(span):
+        n, y = 0, a
+        while y:
+            n += attr(y, "gen_ai.transfer.target.name") is not None and attr(y, "gen_ai.operation.name") == "execute_tool"
+            y = per_id.get(y["padre"])
+        fondo = max(fondo, n)
+    return fondo
 
 
 def pagine_avvisi(span) -> int:
@@ -1002,7 +1087,8 @@ def misura(r: dict) -> dict:
     span, risposta, strato = r["span"], r["risposta"] or "", r["strato"]
     se = lambda nome, valore: valore() if strato >= MINIMO_MISURE[nome] else None
     livelli = [lv for _, lv in in_ordine(span)]
-    avvisi_tool, a_avvisi = strumenti(span, "leggi_avvisi"), archi(span, ("avvisi",))
+    avvisi_tool, a_avvisi = strumenti(span, "leggi_avvisi"), archi(span, ("avvisi",), da="coordina")
+    ricontrolli = archi(span, ("avvisi",), da="valida")
     verdetto = se("verdetti", lambda: verdetti(span))
     return {**esito(r), "grafo": " ".join(grafo(span)), "profondita": max(livelli) + 1 if livelli else 0,
             "stesso_giro": se("stesso_giro", lambda: stesso_giro(span)),
@@ -1011,6 +1097,14 @@ def misura(r: dict) -> dict:
             "tool_ha_avviso": se("letto", lambda: any(AVVISO_CHIAVE in attr(x, "gen_ai.tool.call.result", "") for x in avvisi_tool)),
             "avvisi_riporta": se("riporta", lambda: any(riporta_avviso(attr(x, "gen_ai.tool.call.result", "")) for x in a_avvisi)),
             "avvisi_con_sala": se("riporta", lambda: any(AVVISI_SALA_B.search(attr(x, "gen_ai.tool.call.arguments", "")) for x in a_avvisi)),
+            "sale_da_due": se("sale_due", lambda: sale_da_due(span)),
+            "valida_avvisi": se("valida_rivede", lambda: bool(ricontrolli)),
+            "valida_avvisi_riporta": se("valida_riporta", lambda: any(riporta_avviso(attr(x, "gen_ai.tool.call.result", "")) for x in ricontrolli)),
+            "valida_programma": se("valida_rivede", lambda: bool(archi(span, ("programma",), da="valida"))),
+            "avvisi_chiede_programma": se("dialogo", lambda: dialogo(span)),
+            "avvisi_poi_riporta": se("dialogo_riporta", lambda: dialogo_riporta(span)),
+            "cicli": se("cicli", lambda: cicli(span)),
+            "profondita_agenti": se("profondita_agenti", lambda: profondita_agenti(span)),
             "valida_chiamate": None if verdetto is None else len(verdetto),
             "valida_approva": None if verdetto is None else sum(verdetto),
             "email_a_valida": se("email_valida", lambda: any(EMAIL.search(attr(x, "gen_ai.tool.call.arguments", ""))
@@ -1045,6 +1139,13 @@ def misure(cartelle: list[Path]):
             print(conta("avvisi_con_sala", 3, "la richiesta ad avvisi nomina la sala B"))
             print(conta("tool_ha_avviso", 3, "leggi_avvisi ha restituito l'avviso sulla sala B"))
             print(conta("avvisi_riporta", 3, "avvisi lo riporta a coordina"))
+            print(conta("sale_da_due", 2, "sale chiamato da due chiamanti diversi"))
+            print(conta("valida_avvisi", 2, "valida richiede ad avvisi"))
+            print(conta("valida_avvisi_riporta", 3, "...e la risposta di avvisi riporta l'avviso"))
+            print(conta("valida_programma", 2, "valida richiede a programma"))
+            if regs[0].get("correzione") == 3:  # solo la correzione dialogo
+                print(conta("avvisi_chiede_programma", 2, "avvisi chiede a programma"))
+                print(conta("avvisi_poi_riporta", 3, "...e poi avvisi riporta l'avviso"))
             if strato < MINIMO_MISURE["pagine"]:
                 print(f"  {'pagine di avvisi lette':<52} serve lo strato 4")
             else:
@@ -1066,6 +1167,12 @@ def misure(cartelle: list[Path]):
                     f"{a} {statistics.median(m['costo_agente'].get(a, 0) for m in mm):.6f}" for a in agenti))
                 print(f"  {'quota di avvisi sui token della richiesta':<52} mediana {med('quota_avvisi'):.0%}")
                 print(f"  {'quota delle riletture (token in ingresso)':<52} mediana {med('riletture'):.0%}")
+            if strato < MINIMO_MISURE["cicli"]:
+                print(f"  {'guardia dei cicli scattata':<52} serve lo strato 2")
+            else:
+                print(f"  {'guardia dei cicli scattata':<52} {sum(m['cicli'] > 0 for m in mm):>2} su {n} · {sum(m['cicli'] for m in mm)} volte")
+                print(f"  massimi: profondità {max(m['profondita'] for m in mm)} (agenti uno dentro l'altro "
+                      f"{max(m['profondita_agenti'] for m in mm)}) · span {max(m['span'] for m in mm)}")
             print(f"  mediane: profondità {med('profondita'):.0f} · span {med('span'):.0f} · chiamate al modello "
                   f"{med('chiamate'):.0f} · token {med('token'):.0f} · secondi {med('secondi'):.1f} · $ {med('costo'):.6f}")
             grafi = {}
@@ -1118,6 +1225,7 @@ if __name__ == "__main__":
     p.add_argument("--guasto", action="store_true")
     p.add_argument("--correzione", action="store_true", help="coordina chiede ad avvisi la sala della sessione")
     p.add_argument("--correzione-completa", action="store_true", help="...e leggi_avvisi restituisce solo gli avvisi di quella sala")
+    p.add_argument("--correzione-dialogo", action="store_true", help="avvisi puo' chiedere a programma giorno, ora e sala (alternativa alle altre due)")
     p.add_argument("--maschera", action="store_true", help="solo con --strato 5: l'email non esce dagli span")
     p.add_argument("--produzione", action="store_true", help="dallo strato 2: il riassunto della richiesta sulla radice")
     p.add_argument("--otlp", metavar="URL", help="esporta gli span via OTLP HTTP (implica --produzione)")
@@ -1145,9 +1253,9 @@ if __name__ == "__main__":
         if PRODUZIONE and a.strato < 2:
             raise SystemExit("--produzione serve dallo strato 2, dove c'e' la radice della richiesta")
         STRATO, MASCHERA = a.strato, a.maschera
-        CORREZIONE = 2 if a.correzione_completa else 1 if a.correzione else 0
+        CORREZIONE = 3 if a.correzione_dialogo else 2 if a.correzione_completa else 1 if a.correzione else 0
         a.guasto = a.guasto or CORREZIONE > 0  # la correzione ha senso solo nella giornata piena
-        coda = ["", "-correzione", "-correzione-completa"][CORREZIONE] + ("-maschera" if MASCHERA else "") + ("-produzione" if PRODUZIONE else "")
+        coda = ["", "-correzione", "-correzione-completa", "-correzione-dialogo"][CORREZIONE] + ("-maschera" if MASCHERA else "") + ("-produzione" if PRODUZIONE else "")
         cartella = QUI / "registrazioni" / f"strato-{a.strato}{coda}"
         if a.banco:
             riuscite, fallite = esegui_banco(a.banco, a.guasto, cartella)

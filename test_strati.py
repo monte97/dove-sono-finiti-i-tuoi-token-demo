@@ -20,12 +20,29 @@ INTESTAZIONI = {"request-id": "req_finto", "anthropic-organization-id": "org-fin
 VISTE = []  # le intestazioni che il client manda al provider
 CORPI = []  # i corpi delle richieste: istruzioni, messaggi, strumenti
 PAUSA = 0.15  # secondi di attesa del server finto prima di far chiamare lo strumento: rende l'overlap deterministico
+# Cosa fa il modello finto oltre al giro base. Tutto spento: la demo di prima (coordina chiama i tre agenti e valida).
+#   annidate    programma chiede anche a sale; valida ricontrolla con programma e avvisi, insieme
+#   valida_sala la richiesta di valida ad avvisi nomina la sala B (e allora avvisi riporta l'avviso)
+#   dialogo     avvisi chiede anche a programma (serve --correzione-dialogo: senza, non ha lo strumento)
+#   ciclo       programma prova a richiamare questo agente (se stesso, o avvisi che l'ha chiamato nel dialogo)
+FINTO = {"annidate": False, "valida_sala": False, "dialogo": False, "ciclo": None}
+
+
+@contextlib.contextmanager
+def finto(**scelte):
+    prima = dict(FINTO)
+    FINTO.update(scelte)
+    try:
+        yield
+    finally:
+        FINTO.clear()
+        FINTO.update(prima)
 
 
 def risposta_finta(richiesta):
     """Simula Claude. coordina chiama programma, sale, avvisi, poi valida, poi risponde; i tre agenti chiamano il
     loro strumento e rispondono; avvisi non riporta l'avviso sulla sala B (e' lo sbaglio che la demo osserva).
-    Senza strumenti risponde come valida."""
+    Senza strumenti risponde come valida. Con FINTO acceso, anche le chiamate fra agenti (vedi sopra)."""
     VISTE.append(dict(richiesta.headers))
     corpo = json.loads(richiesta.content)
     CORPI.append(corpo)
@@ -38,16 +55,22 @@ def risposta_finta(richiesta):
     base = {"id": "msg_finto", "type": "message", "role": "assistant", "model": s.MODEL, "usage": uso}
     chiesti = {x["name"] for m in messaggi if isinstance(m["content"], list) for x in m["content"] if x.get("type") == "tool_use"}
     risultato = ultimo[-1]["content"] if isinstance(ultimo, list) else None
+    risultati = {b["tool_use_id"].split("-", 1)[1]: str(b["content"]) for b in ultimo} if isinstance(ultimo, list) else {}
+    prima_richiesta = messaggi[0]["content"]
 
     def chiama(nome, argomenti):
-        contenuto = [pensiero, {"type": "tool_use", "id": f"t{len(messaggi)}-{nome}", "name": nome, "input": argomenti}]
+        return chiama_molti({nome: argomenti})
+
+    def chiama_molti(chiamate):
+        contenuto = [pensiero] + [{"type": "tool_use", "id": f"t{len(messaggi)}-{nome}", "name": nome, "input": argomenti}
+                                  for nome, argomenti in chiamate.items()]
         return httpx.Response(200, headers=INTESTAZIONI, json={**base, "stop_reason": "tool_use", "content": contenuto})
 
     def rispondi(testo):
         return httpx.Response(200, headers=INTESTAZIONI,
                               json={**base, "stop_reason": "end_turn", "content": [pensiero, {"type": "text", "text": testo}]})
 
-    if "programma" in strumenti:  # coordina
+    if "valida" in strumenti:  # coordina
         richieste = {"programma": "A che ora è il workshop Kubernetes da zero?",
                      "sale": "In che sala è il workshop Kubernetes da zero?",
                      "avvisi": "Ci sono avvisi sul workshop Kubernetes da zero?"}
@@ -59,12 +82,30 @@ def risposta_finta(richiesta):
         contenuto = [pensiero] + [{"type": "tool_use", "id": f"t1-{n}", "name": n, "input": {"richiesta": r}}
                                   for n, r in richieste.items()]  # i tre insieme, in un solo giro
         return httpx.Response(200, headers=INTESTAZIONI, json={**base, "stop_reason": "tool_use", "content": contenuto})
+    if FINTO["annidate"] and not dati and strumenti:  # valida con programma e avvisi come strumenti
+        if len(messaggi) == 1:
+            sala = "Ci sono avvisi sulla sala B oggi?" if FINTO["valida_sala"] else "Ci sono avvisi sul workshop Kubernetes da zero?"
+            return chiama_molti({"programma": {"richiesta": "Giorno, ora e sala del workshop Kubernetes da zero?"},
+                                 "avvisi": {"richiesta": sala}})
+        if "chius" in risultati.get("avvisi", ""):
+            return rispondi("La sala B è chiusa dalle 15:00: l'orario non è confermato.")
+        return rispondi("Oggi alle 15:00, sala B.\n\nVerificato.")
     if dati and len(messaggi) == 1:
         argomenti = {c: ("B" if c == "sala" else "Kubernetes da zero") for c in dati["input_schema"].get("required", [])}
-        time.sleep(PAUSA)  # solo nel test: i tre rami si sovrappongono sempre
-        return chiama(dati["name"], argomenti)
+        time.sleep(PAUSA)  # solo nel test: i rami si sovrappongono sempre
+        altri = {}
+        if FINTO["annidate"] and "sale" in strumenti and dati["name"] == "leggi_programma":  # programma chiede il piano a sale
+            altri["sale"] = {"richiesta": "In che sala e a che piano è il workshop Kubernetes da zero?"}
+        if FINTO["dialogo"] and "programma" in strumenti and dati["name"] == "leggi_avvisi":  # avvisi chiede la sala a programma
+            altri["programma"] = {"richiesta": "Giorno, ora e sala del workshop Kubernetes da zero?"}
+        if FINTO["ciclo"] and dati["name"] == "leggi_programma" and (FINTO["ciclo"] == "programma" or "Giorno, ora e sala" in prima_richiesta):
+            altri[FINTO["ciclo"]] = {"richiesta": "ancora tu?"}
+        return chiama_molti({dati["name"]: argomenti, **altri})
     if dati:
-        return rispondi({"leggi_programma": "Oggi alle 15:00, sala B.", "leggi_sale": "Sala B, primo piano, 80 posti.",
+        if dati["name"] == "leggi_avvisi" and ("sala B" in prima_richiesta or "sala B" in risultati.get("programma", "")):
+            return rispondi("- " + s.AVVISO_CHIAVE)  # sa che e' la sala B: non lascia l'avviso fra i 400
+        return rispondi({"leggi_programma": "Oggi alle 15:00, sala B" + (", piano 1." if FINTO["annidate"] else "."),
+                         "leggi_sale": "Sala B, primo piano, 80 posti.",
                          "leggi_avvisi": "Nessun avviso sul workshop."}[dati["name"]])
     return rispondi("Oggi alle 15:00, sala B.\n\nVerificato.")
 
@@ -590,6 +631,201 @@ def test_produzione_dal_vivo_porta_il_banco():
         s.PRODUZIONE = False
     radice = next(x for x in reg["span"] if x["padre"] is None)
     assert radice["attributi"]["banco.cartella"] == CARTELLA.name and radice["attributi"]["banco.modo"] == "guasto"
+
+def corri_annidato(strato=5, correzione=0, guasto=True, **scelte):
+    """Una run con il modello finto che si fa chiamare fra agenti (vedi FINTO) e la correzione scelta."""
+    try:
+        s.CORREZIONE = correzione
+        with finto(**scelte):
+            return corri(strato, guasto)
+    finally:
+        s.CORREZIONE = 0
+
+
+def percorso(reg, x):
+    """I nomi degli span da x alla radice, per verificare la parentela a piu' livelli."""
+    per_id, fuori = {y["id"]: y for y in reg["span"]}, []
+    while x:
+        fuori.append(x["nome"])
+        x = per_id.get(x["padre"])
+    return fuori
+
+
+def arcs(reg, verso, da=None):
+    return s.archi(reg["span"], (verso,), da=da)
+
+
+FORMA_ANNIDATA = ("codice>coordina "
+                  "coordina>{avvisi(leggi_avvisi),programma({leggi_programma,sale(leggi_sale)}),sale(leggi_sale)} "
+                  "coordina>valida({avvisi(leggi_avvisi),programma({leggi_programma,sale(leggi_sale)})})")
+FORMA_DIALOGO = ("codice>coordina coordina>{avvisi({leggi_avvisi,programma(leggi_programma)}),programma(leggi_programma),"
+                 "sale(leggi_sale)} coordina>valida")
+
+
+def test_annidate_la_parentela_a_piu_livelli():
+    reg, _ = corri_annidato(annidate=True)
+    assert s.esito(reg)["tracce"] == 1
+    sale_ = arcs(reg, "sale")
+    assert [attr_ for attr_ in sorted(s.attr(x, "gen_ai.agent.name") for x in sale_)] == ["coordina", "programma", "programma"]
+    # programma>sale: l'arco di sale sta dentro invoke_agent programma, che sta dentro l'arco di programma
+    da_programma = arcs(reg, "sale", da="programma")[0]
+    assert percorso(reg, da_programma)[:4] == ["execute_tool sale", "invoke_agent programma", "execute_tool programma",
+                                              "invoke_agent coordina"] or percorso(reg, da_programma)[:4] == [
+        "execute_tool sale", "invoke_agent programma", "execute_tool programma", "invoke_agent valida"]
+    # e sotto l'arco di sale annidato, il suo agente e il suo strumento
+    foglie = [x for x in reg["span"] if x["nome"] == "execute_tool leggi_sale"]
+    assert len(foglie) == 3 and all(percorso(reg, x)[1] == "invoke_agent sale" for x in foglie)
+    # valida>programma e valida>avvisi: due archi con chiamante valida, dentro invoke_agent valida
+    for verso in ("programma", "avvisi"):
+        x = arcs(reg, verso, da="valida")[0]
+        assert percorso(reg, x)[:3] == [f"execute_tool {verso}", "invoke_agent valida", "execute_tool valida"]
+        assert s.attr(x, "gen_ai.transfer.target.name") == verso and s.attr(x, "gen_ai.transfer.mode") == "return_to_caller"
+    assert len({x["trace"] for x in reg["span"]}) == 1
+    assert " ".join(s.grafo(reg["span"])) == FORMA_ANNIDATA
+
+
+def test_annidate_il_parallelismo_vale_a_ogni_livello():
+    reg, _ = corri_annidato(annidate=True)
+    ricontrolli = s.archi(reg["span"], ("programma", "avvisi"), da="valida")
+    assert len(ricontrolli) == 2 and len({x["padre"] for x in ricontrolli}) == 1  # lo stesso invoke_agent valida
+    assert max(x["inizio"] for x in ricontrolli) < min(x["fine"] for x in ricontrolli)  # i due ricontrolli si sovrappongono
+    # e la forma non dipende da chi parte prima
+    for _ in range(3):
+        assert s.grafo(corri_annidato(annidate=True)[0]["span"]) == s.grafo(reg["span"])
+    # in sequenza (a mano): due gruppi, non un insieme
+    a, b = [dict(x) for x in ricontrolli]
+    assert a["fine"] > b["inizio"]
+    b["inizio"], b["fine"] = a["fine"] + 1, a["fine"] + 2
+    dopo = [x for x in reg["span"] if x["id"] not in {a["id"], b["id"]}] + [a, b]
+    assert "valida(" in " ".join(s.grafo(dopo)) and ",programma" not in " ".join(s.grafo(dopo)).split("coordina>valida")[1][:30]
+
+
+def test_annidate_le_misure_nuove():
+    reg, _ = corri_annidato(annidate=True)
+    m = s.misura(reg)
+    assert m["sale_da_due"] and m["valida_avvisi"] and m["valida_programma"] and m["cicli"] == 0
+    assert m["valida_avvisi_riporta"] is False  # il ricontrollo chiede del workshop: avvisi non sa della sala B
+    assert m["avvisi_chiede_programma"] is False and m["profondita_agenti"] == 3  # coordina>valida>programma>sale
+    assert m["stesso_giro"] and not m["avvisi_dopo_sala"] and m["avvisi_riporta"] is False  # le chiamate annidate non contano
+    assert m["grafo"] == FORMA_ANNIDATA
+    assert m["span"] == len(reg["span"]) and m["profondita"] > 5
+    base = s.misura(corri(5)[0])
+    assert base["sale_da_due"] is False and base["valida_avvisi"] is False and base["profondita_agenti"] == 1
+    # ogni misura ha il suo strato minimo: sotto, None
+    m2 = s.misura(corri_annidato(strato=2, annidate=True)[0])
+    assert m2["sale_da_due"] and m2["valida_avvisi"] and m2["valida_avvisi_riporta"] is None and m2["avvisi_poi_riporta"] is None
+    m1 = s.misura(corri_annidato(strato=1, annidate=True)[0])
+    assert m1["sale_da_due"] is None and m1["cicli"] is None and m1["profondita_agenti"] is None
+
+
+def test_annidate_valida_chiede_la_sala_e_avvisi_riporta():
+    reg, _ = corri_annidato(annidate=True, valida_sala=True)
+    m = s.misura(reg)
+    assert m["valida_avvisi"] and m["valida_avvisi_riporta"] is True
+    assert m["valida_approva"] == 0 and m["valida_chiamate"] == 1  # valida, informata, non approva
+    assert m["avvisi_riporta"] is False  # coordina non l'ha chiesto con la sala: il suo avvisi non riporta
+
+
+def test_annidate_il_conteggio_degli_span_su_una_run_guasta_allo_strato_5():
+    reg, _ = corri_annidato(annidate=True)
+    base = len(corri(5)[0]["span"])
+    print(f"   span strato 5 guasto: {len(reg['span'])} con le chiamate annidate, {base} senza")
+    assert len(reg["span"]) == 44 and base == 23
+
+
+def test_dialogo_avvisi_chiede_a_programma():
+    reg, _ = corri_annidato(correzione=3, dialogo=True)
+    assert reg["correzione"] == 3
+    # la correzione 3 e' un'alternativa: coordina e leggi_avvisi come nel guasto
+    try:
+        s.CORREZIONE = 3
+        assert s.istruzioni_coordina() == s.ISTRUZIONI["coordina"]
+        assert s.schemi()["leggi_avvisi"]["input_schema"].get("required") is None
+        _, istr, strumenti = s.agenti_strumento()["avvisi"]
+        assert istr == s.ISTRUZIONI["avvisi"] + s.CORREZIONE_DIALOGO and strumenti == ["leggi_avvisi", "programma"]
+        assert "Nessun avviso" not in s.leggi_dato("leggi_avvisi", {}, {"piena": True})
+    finally:
+        s.CORREZIONE = 0
+    assert s.CORREZIONE_DIALOGO.count(".") == 1  # una frase sola
+    assert s.agenti_strumento()["avvisi"][2] == ["leggi_avvisi"] and s.agenti_strumento()["avvisi"][1] == s.ISTRUZIONI["avvisi"]
+    assert any(isinstance(c.get("system"), str) and c["system"].endswith("all'agente programma.") for c in CORPI)
+    m = s.misura(reg)
+    assert m["avvisi_chiede_programma"] is True and m["avvisi_poi_riporta"] is True and m["avvisi_riporta"] is True
+    x = arcs(reg, "programma", da="avvisi")[0]
+    assert percorso(reg, x)[:3] == ["execute_tool programma", "invoke_agent avvisi", "execute_tool avvisi"]
+    assert s.attr(x, "gen_ai.transfer.target.name") == "programma"
+    assert m["grafo"] == FORMA_DIALOGO
+    assert m["esito"] in s.ESITI
+    # senza la correzione, nella stessa run, avvisi non chiede a programma
+    assert s.misura(corri(5)[0])["avvisi_chiede_programma"] is False
+    # il dialogo non c'e' se lo strumento non e' dato: il modello finto che vorrebbe farlo non puo'
+    reg0, _ = corri_annidato(dialogo=True)
+    assert s.misura(reg0)["avvisi_chiede_programma"] is False
+
+
+def test_dialogo_nelle_misure_stampate():
+    cartella = Path(tempfile.mkdtemp()) / "strato-5-correzione-dialogo"
+    cartella.mkdir(parents=True)
+    for i in range(2):
+        reg, _ = corri_annidato(correzione=3, dialogo=True, annidate=True)
+        (cartella / f"{i}.json").write_text(json.dumps(reg))
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        s.misure([cartella])
+    testo = fuori.getvalue()
+    for riga in ("avvisi chiede a programma", "...e poi avvisi riporta l'avviso", "sale chiamato da due chiamanti diversi",
+                 "valida richiede ad avvisi", "valida richiede a programma", "guardia dei cicli scattata", "massimi: profondità"):
+        assert riga in testo, riga
+    assert " 2 su 2" in testo
+    altra = Path(tempfile.mkdtemp()) / "strato-5"  # fuori dal dialogo le righe del dialogo non ci sono
+    altra.mkdir(parents=True)
+    (altra / "a.json").write_text(json.dumps(corri(5)[0]))
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        s.misure([altra])
+    assert "avvisi chiede a programma" not in fuori.getvalue() and "guardia dei cicli" in fuori.getvalue()
+
+
+def test_guardia_contro_i_cicli_unita():
+    assert s.controlla_catena("sale", ("coordina", "programma")) is None
+    assert s.controlla_catena("programma", ("coordina", "programma")) == (
+        "programma è già nella catena di chiamata (coordina > programma): non puoi richiamarlo.")
+    assert "avvisi è già nella catena" in s.controlla_catena("avvisi", ("coordina", "avvisi", "programma"))
+    assert s.controlla_catena("sale", ("coordina", "valida", "avvisi", "programma")) is None  # il ramo piu' lungo che serve
+    assert "troppo profonda" in s.controlla_catena("sale", ("coordina", "valida", "avvisi", "programma", "x"))
+    assert s.CATENA.get() == ()  # la catena si scioglie: nessuna eredita' fra una run e l'altra
+
+
+def test_guardia_un_agente_non_richiama_se_stesso():
+    reg, _ = corri_annidato(ciclo="programma")  # programma prova a richiamare programma
+    ciclo_ = next(x for x in reg["span"] if x["nome"] == "execute_tool programma" and x["errore"])
+    assert percorso(reg, ciclo_)[1] == "invoke_agent programma" and ciclo_["attributi"]["error.type"] == "ciclo"
+    assert "programma è già nella catena di chiamata" in ciclo_["attributi"]["gen_ai.tool.call.result"]
+    assert not any(x["padre"] == ciclo_["id"] for x in reg["span"])  # nessun invoke_agent sotto: la chiamata non e' partita
+    assert reg["risposta"] and s.misura(reg)["cicli"] == 1 and "programma!" in s.misura(reg)["grafo"]
+    # il modello vede l'errore come risultato dello strumento, marcato is_error
+    tool_result = [b for c in CORPI if isinstance(c["messages"][-1]["content"], list) for b in c["messages"][-1]["content"]
+                   if b.get("is_error")]
+    assert tool_result and "già nella catena di chiamata" in str(tool_result[-1]["content"])
+    # lo span di errore ha lo stato di errore e il colore rosso nella stampa
+    assert all(not x["errore"] for x in reg["span"] if x is not ciclo_)
+    reg0, _ = corri_annidato(strato=0, ciclo="programma")  # la guardia c'e' anche senza OpenTelemetry
+    assert reg0["span"] == [] and reg0["risposta"]
+    reg3, _ = corri_annidato(strato=3, ciclo="programma")
+    assert "già nella catena" in next(x for x in reg3["span"] if x["errore"])["attributi"]["gen_ai.tool.call.result"]
+
+
+def test_guardia_nel_dialogo_programma_non_richiama_avvisi():
+    reg, _ = corri_annidato(correzione=3, dialogo=True, ciclo="avvisi")  # coordina>avvisi>programma>avvisi
+    m = s.misura(reg)
+    assert m["cicli"] == 1 and "avvisi({leggi_avvisi,programma({avvisi!,leggi_programma})})" in m["grafo"]
+    ciclo_ = next(x for x in reg["span"] if x["errore"])
+    assert percorso(reg, ciclo_)[:3] == ["execute_tool avvisi", "invoke_agent programma", "execute_tool programma"]
+    assert reg["risposta"]  # la run finisce lo stesso
+
+
+def test_codice_2_resta_pulito_con_la_guardia():
+    assert "CATENA" not in s.codice(2)  # la guardia e' codice applicativo, non si marca
+    assert 'span.set_attribute("error.type", "ciclo")' in s.codice(2)
+
 
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):

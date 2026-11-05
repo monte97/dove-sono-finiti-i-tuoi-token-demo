@@ -15,10 +15,11 @@ for N in 0 1 2 3 4 5; do
   .venv/bin/python strati.py --strato $N --guasto --banco 30               # guasto
   .venv/bin/python strati.py --strato $N --correzione --banco 30           # correzione
   .venv/bin/python strati.py --strato $N --correzione-completa --banco 30  # correzione completa
+  .venv/bin/python strati.py --strato $N --correzione-dialogo --banco 30   # correzione dialogo
 done
 ```
 
-Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione` e `strato-N-correzione-completa`;
+Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione`, `strato-N-correzione-completa` e `strato-N-correzione-dialogo`;
 `sana` e `guasto` stanno nella stessa cartella e si distinguono dal campo `modo`.
 
 ## La tabella
@@ -38,9 +39,32 @@ Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione` e `s
 | Forme dell'albero | `[banco]` | `.venv/bin/python strati.py --misure 5` (elenco `forme dell'albero`); `.venv/bin/python segnali.py registrazioni/strato-5` |
 | Correzione, passo 1: correttezza e costo | `[banco]` | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione` |
 | Correzione completa, passo 2: correttezza e costo | `[banco]` | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione-completa`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione-completa` |
+| Correzione dialogo: correttezza e costo | `[banco]` | `.venv/bin/python strati.py --misure 5` (cartella `strato-5-correzione-dialogo`); `.venv/bin/python segnali.py registrazioni/strato-5-correzione-dialogo`. È un'alternativa alle altre due (non le include): `avvisi` ha anche l'agente `programma` come strumento |
+| Run in cui `avvisi` chiede a `programma`, e poi riporta l'avviso (solo dialogo) | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `avvisi chiede a programma` e `...e poi avvisi riporta l'avviso`, solo nella cartella `-correzione-dialogo`) |
+| Run in cui `sale` è chiamato da due chiamanti (`coordina` e `programma`) | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `sale chiamato da due chiamanti diversi`) |
+| Run in cui `valida` ricontrolla con `avvisi`, e se la risposta riporta l'avviso | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `valida richiede ad avvisi` e `...e la risposta di avvisi riporta l'avviso`) |
+| Run in cui `valida` ricontrolla con `programma` | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `valida richiede a programma`) |
+| Profondità massima dell'albero e numero di span | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `massimi: profondità ... span ...` e `mediane: profondità ... · span ...`) |
+| Volte in cui la guardia contro i cicli ha rifiutato una chiamata | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `guardia dei cicli scattata`) |
 
-`--misure 5` stampa insieme `strato-5`, `strato-5-correzione` e `strato-5-correzione-completa`, ognuna con le
-giornate `guasto` e `sana` che contiene.
+`--misure 5` stampa insieme `strato-5`, `strato-5-correzione`, `strato-5-correzione-completa` e
+`strato-5-correzione-dialogo`, ognuna con le giornate `guasto` e `sana` che contiene.
+
+## Agenti che si chiamano
+
+`programma` ha `sale` come strumento (per il piano), `valida` ha `programma` e `avvisi` (può ricontrollare alla fonte,
+le istruzioni lo consigliano), e con `--correzione-dialogo` anche `avvisi` ha `programma`. Ogni chiamata fra agenti è un
+arco `execute_tool <agente>` del chiamante con dentro `invoke_agent <agente>`, a qualsiasi livello.
+
+Guardia contro i cicli: la catena di chiamata (chi ha chiamato chi, da `coordina`) viaggia in una variabile di contesto,
+mai nel prompt. Un agente non può chiamare se stesso né uno già nella catena, e la catena ha al massimo 4 chiamate una
+dentro l'altra (il ramo più lungo che serve è `coordina>valida>avvisi>programma>sale`). Se il modello ci prova, lo
+strumento gli restituisce l'errore («<agente> è già nella catena di chiamata ...», `is_error`) e l'arco ha stato di errore
+ed `error.type = ciclo`: è un errore vero del modello, non il meccanismo del guasto.
+
+Con le chiamate annidate una run allo strato 5 ha più span: sul server finto, con `programma>sale` e i due ricontrolli
+di `valida`, sono 44 contro 23 senza (oltre i 40 indicativi). `pagine di avvisi lette` somma tutte le letture, quindi
+con il ricontrollo di `valida` può superare 40.
 
 ## I tre esiti
 

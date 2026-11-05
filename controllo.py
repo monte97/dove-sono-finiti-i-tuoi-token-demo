@@ -25,6 +25,7 @@ BANCO = QUI / "registrazioni"
 CASI = [
     ("strato-5", 0, True), ("strato-5", 0, False),
     ("strato-5-correzione", 1, True), ("strato-5-correzione-completa", 2, True),
+    ("strato-5-correzione-dialogo", 3, True),
 ]
 SDK = ("strato-1", 0, True)  # due run bastano per vedere come l'SDK scrive gli span
 
@@ -64,6 +65,11 @@ def numeri(regs: list[dict]) -> dict:
         "pagine avvisi mediana": statistics.median(m["pagine_avvisi"] for m in mm),
         "quota avvisi mediana": statistics.median(map(quota, mm)),
         "valida approva": sum(m["valida_approva"] > 0 for m in mm) / len(mm),
+        "sale da due": sum(bool(m["sale_da_due"]) for m in mm) / len(mm),
+        "valida ricontrolla": sum(bool(m["valida_avvisi"] or m["valida_programma"]) for m in mm) / len(mm),
+        "avvisi chiede a prog.": sum(bool(m["avvisi_chiede_programma"]) for m in mm) / len(mm),
+        "dialogo e riporta": sum(bool(m["avvisi_poi_riporta"]) for m in mm) / len(mm),
+        "guardia scattata": sum(bool(m["cicli"]) for m in mm) / len(mm),
         "albero più comune": forme.most_common(1)[0][1] / len(mm),
         "forme dell'albero": len(forme),
         "costo mediana $": statistics.median(map(costo, regs)),
@@ -106,7 +112,7 @@ def confronta(cartella: Path):
             print(f"  {a:<40} {"c'è" if a in attributi else 'MANCA'}")
         print("  modello che risponde:", {s.attr(x, "gen_ai.response.model") for x in span} - {None})
     print("\nIl banco ha 30 run per caso, il controllo poche: una differenza di una run su dieci e' rumore. "
-          "Contano i cambi di verso (avvisi lo riporta sempre -> a volte, valida approva -> obietta, i rami non piu' nello stesso giro) e i nomi degli span.")
+          "Contano i cambi di verso (avvisi lo riporta sempre -> a volte, valida che ricontrolla o avvisi che chiede a programma dove prima non succedeva, valida approva -> obietta, i rami non piu' nello stesso giro) e i nomi degli span.")
 
 
 if __name__ == "__main__":
