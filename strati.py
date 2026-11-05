@@ -364,7 +364,8 @@ ISTRUZIONI = {
                "Altrimenti spiega cosa non va."),
 }
 DESCRIZIONI = {
-    "programma": "Agente che trova giorno, ora e sala di una sessione leggendo il programma pubblicato. Risponde in una riga.",
+    "programma": ("Agente che trova giorno, ora e sala di una sessione leggendo il programma pubblicato, e il piano "
+                  "chiedendolo a sale. Risponde in una riga."),
     "sale": "Agente che trova sala, piano e capienza di una sessione leggendo il database delle sale. Risponde in una riga.",
     "avvisi": "Agente che riporta gli avvisi di oggi che riguardano la richiesta, al massimo tre righe.",
     "valida": ("Agente che controlla una risposta prima che arrivi all'utente. Restituisce la risposta verificata "
@@ -1030,8 +1031,26 @@ def profondita_agenti(span) -> int:
     return fondo
 
 
+def _letture_avvisi(span, di_coordina: bool) -> int:
+    """Pagine lette da leggi_avvisi: quelle sotto l'arco di avvisi chiamato da coordina, oppure tutte le altre."""
+    per_id, tot = {x["id"]: x for x in span}, 0
+    for x in strumenti(span, "leggi_avvisi"):
+        y = per_id.get(x["padre"])
+        while y and not (attr(y, "gen_ai.operation.name") == "execute_tool" and attr(y, "gen_ai.transfer.target.name")):
+            y = per_id.get(y["padre"])
+        if (y is not None and attr(y, "gen_ai.agent.name") == "coordina") == di_coordina:
+            tot += attr(x, "avvisi.pagine", 0)
+    return tot
+
+
 def pagine_avvisi(span) -> int:
-    return sum(attr(x, "avvisi.pagine", 0) for x in strumenti(span, "leggi_avvisi"))
+    """Le pagine che legge l'avvisi chiamato da coordina: il numero della slide."""
+    return _letture_avvisi(span, True)
+
+
+def pagine_ricontrolli(span) -> int:
+    """Le pagine lette da leggi_avvisi sotto qualunque altro chiamante (i ricontrolli di valida, il dialogo)."""
+    return _letture_avvisi(span, False)
 
 
 def verdetti(span) -> list[bool]:
@@ -1094,6 +1113,7 @@ def misura(r: dict) -> dict:
             "stesso_giro": se("stesso_giro", lambda: stesso_giro(span)),
             "avvisi_dopo_sala": se("dopo_sala", lambda: avvisi_dopo_sala(span)),
             "pagine_avvisi": se("pagine", lambda: pagine_avvisi(span)),
+            "pagine_ricontrolli": se("pagine", lambda: pagine_ricontrolli(span)),
             "tool_ha_avviso": se("letto", lambda: any(AVVISO_CHIAVE in attr(x, "gen_ai.tool.call.result", "") for x in avvisi_tool)),
             "avvisi_riporta": se("riporta", lambda: any(riporta_avviso(attr(x, "gen_ai.tool.call.result", "")) for x in a_avvisi)),
             "avvisi_con_sala": se("riporta", lambda: any(AVVISI_SALA_B.search(attr(x, "gen_ai.tool.call.arguments", "")) for x in a_avvisi)),
@@ -1149,8 +1169,10 @@ def misure(cartelle: list[Path]):
             if strato < MINIMO_MISURE["pagine"]:
                 print(f"  {'pagine di avvisi lette':<52} serve lo strato 4")
             else:
-                print(f"  {'pagine di avvisi lette':<52} mediana {med('pagine_avvisi'):.0f} (da {min(m['pagine_avvisi'] for m in mm)} "
+                print(f"  {'pagine di avvisi lette da coordina':<52} mediana {med('pagine_avvisi'):.0f} (da {min(m['pagine_avvisi'] for m in mm)} "
                       f"a {max(m['pagine_avvisi'] for m in mm)})")
+                print(f"  {'pagine di avvisi nei ricontrolli':<52} mediana {med('pagine_ricontrolli'):.0f} (da {min(m['pagine_ricontrolli'] for m in mm)} "
+                      f"a {max(m['pagine_ricontrolli'] for m in mm)})")
             if any(m["valida_approva"] is None for m in mm):
                 print(f"  {'valida approva':<52} serve lo strato 3")
             else:

@@ -311,7 +311,7 @@
    "id": 6,
    "type": "stat",
    "title": "Pagine di avvisi lette",
-   "description": "Pagine di avvisi lette da leggi_avvisi in una richiesta, sulla radice (richiesta.pagine_avvisi).",
+   "description": "Pagine di avvisi lette da leggi_avvisi sotto l'avvisi chiamato da coordina (i ricontrolli di valida e il dialogo non contano), sulla radice (richiesta.pagine_avvisi).",
    "datasource": {
     "type": "tempo",
     "uid": "tempo"

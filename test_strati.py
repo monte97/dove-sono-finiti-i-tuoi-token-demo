@@ -726,6 +726,16 @@ def test_annidate_valida_chiede_la_sala_e_avvisi_riporta():
     assert m["avvisi_riporta"] is False  # coordina non l'ha chiesto con la sala: il suo avvisi non riporta
 
 
+def test_pagine_di_coordina_e_dei_ricontrolli():
+    reg, _ = corri_annidato(annidate=True)  # valida rilegge gli avvisi
+    m = s.misura(reg)
+    assert m["pagine_avvisi"] == 40 and m["pagine_ricontrolli"] == 40
+    assert sg.segnali(reg)["pagine"] == 40  # il cruscotto usa il numero di coordina
+    reg, _ = corri_annidato(correzione=3, dialogo=True)  # nel dialogo avvisi e' ancora quello di coordina
+    assert s.misura(reg)["pagine_avvisi"] == 40 and s.misura(reg)["pagine_ricontrolli"] == 0
+    assert s.misura(corri(5)[0])["pagine_ricontrolli"] == 0
+
+
 def test_annidate_il_conteggio_degli_span_su_una_run_guasta_allo_strato_5():
     reg, _ = corri_annidato(annidate=True)
     base = len(corri(5)[0]["span"])

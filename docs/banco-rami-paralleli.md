@@ -63,8 +63,10 @@ strumento gli restituisce l'errore («<agente> è già nella catena di chiamata 
 ed `error.type = ciclo`: è un errore vero del modello, non il meccanismo del guasto.
 
 Con le chiamate annidate una run allo strato 5 ha più span: sul server finto, con `programma>sale` e i due ricontrolli
-di `valida`, sono 44 contro 23 senza (oltre i 40 indicativi). `pagine di avvisi lette` somma tutte le letture, quindi
-con il ricontrollo di `valida` può superare 40.
+di `valida`, sono 44 contro 23 senza (oltre i 40 indicativi). Pagine di avvisi: `pagine_avvisi` (riga `pagine di avvisi lette da coordina`, `richiesta.pagine_avvisi`
+nel cruscotto, `segnali.py`) conta solo le pagine lette da `leggi_avvisi` sotto l'arco di `avvisi` chiamato da `coordina`:
+è il numero della slide, 40 nella giornata piena. `pagine_ricontrolli` (riga `pagine di avvisi nei ricontrolli`) conta le
+letture sotto qualunque altro chiamante: i ricontrolli di `valida` e il dialogo.
 
 ## I tre esiti
 
