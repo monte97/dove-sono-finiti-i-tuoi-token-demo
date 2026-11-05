@@ -97,7 +97,7 @@ def senza_email(v):  # s5
 
 LOG = logging.getLogger("osservare-a-strati")  # i log come li scrive gia' un team: codice applicativo
 LOG.setLevel(logging.INFO)
-memoria_log = InMemoryLogRecordExporter()  # s3  come `memoria`, per i log; dal vivo OTLP verso un backend
+memoria_log = InMemoryLogRecordExporter()  # rifatto da fai_log a ogni run
 _handler = None
 _provider_log = None
 
