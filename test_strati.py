@@ -294,11 +294,43 @@ def test_trova_con_chiave_vuota_non_trova_niente():
     assert json.loads(s.leggi_dato("leggi_programma", {}, {"piena": True}))["errore"] == "non trovato"
 
 
-def test_esito_per_modo():
-    assert s.sbagliata("Oggi alle 15:00, sala B.", "guasto") and s.giusta("Oggi alle 14:00, sala B.", "guasto")
-    assert not s.giusta("Oggi alle 15:00 (anzi, 14:00).", "guasto") and not s.sbagliata("Alle 14:00.", "guasto")
-    assert s.giusta("Oggi alle 15:00, sala B.", "sana") and s.sbagliata("Oggi alle 14:00, sala B.", "sana")
-    assert not s.giusta("Alle 15:00 o forse alle 14:00.", "sana")
+def test_tre_esiti_giornata_piena():
+    v = lambda r: s.valuta(r, "guasto")
+    # giuste: 14:00 come orario, il 15:00 solo come orario superato
+    assert v("Oggi alle 14:00, sala B.") == "giusta"
+    assert v("Il workshop è oggi in sala B, con orario probabilmente anticipato alle 14:00 rispetto alle 15:00 in programma.") == "giusta"
+    assert v("Oggi alle 14:00 in sala B, non alle 15:00 come da programma.") == "giusta"
+    assert v("Alle 14:00 in sala B (anticipato dalle 15:00 per la manutenzione).") == "giusta"
+    assert v("Alle 14:00: la sala B chiude dalle 15:00 per manutenzione.") == "giusta"
+    # avvisate: 15:00 come orario, ma con l'avvertimento
+    assert v("Il workshop è oggi alle 15:00 in sala B, ma la sala B risulta chiusa dalle 15:00 per manutenzione elettrica, "
+             "quindi potrebbe iniziare alle 14:00.") == "avvisata"
+    assert v("È oggi alle 15:00 in Sala B (piano 1), ma c'è un avviso: sessioni un'ora prima, quindi probabilmente alle 14:00.") == "avvisata"
+    assert v("Oggi alle 15:00 in sala B, ma la sala B è chiusa per manutenzione: chiedi allo staff.") == "avvisata"
+    # sbagliate: 15:00 senza avvertimenti, o nessun orario
+    assert v("Si tiene oggi alle 15:00 nella sala B.") == "sbagliata"
+    assert v("Oggi alle 15:00 nella Sala B, e non risultano variazioni o annullamenti.") == "sbagliata"
+    assert v("Non so dirtelo, chiedi allo staff.") == "sbagliata"
+    assert v("Oggi alle 15:00, sala B, piano 1.") == "sbagliata"
+
+
+def test_due_esiti_giornata_tranquilla():
+    v = lambda r: s.valuta(r, "sana")
+    assert v("Si tiene oggi alle 15:00 nella sala B. Non risultano variazioni.") == "giusta"
+    assert v("Oggi alle 15:00 in sala B, piano 1.") == "giusta"
+    assert v("Oggi alle 14:00, sala B.") == "sbagliata"
+    assert v("Alle 15:00 o forse alle 14:00.") == "sbagliata"
+    assert v("Non so.") == "sbagliata"
+
+
+def test_i_tre_esiti_nel_riepilogo_e_nelle_misure():
+    m = s.esito({"span": [], "fattura": {"chiamate": 0, "in": 0, "cache": 0, "out": 0}, "risposta": "Alle 14:00.",
+                 "modo": "guasto", "secondi": 1})
+    assert m["esito"] == "giusta" and "giusta" not in m and "sbagliata" not in m
+
+
+def test_il_piano_e_nelle_istruzioni_di_coordina():
+    assert "piano" in s.istruzioni_coordina() and "ora, sala e piano" in s.istruzioni_coordina()
 
 
 def tipo_di(voce: str) -> str:

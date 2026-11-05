@@ -289,20 +289,42 @@ def avvisi(piena: bool) -> list[list[str]]:
     return [voci[i:i + AVVISI_PER_PAGINA] for i in range(0, len(voci), AVVISI_PER_PAGINA)]
 
 
-def sbagliata(r: str, modo: str) -> bool:
-    return ("15:00" in r and "14:00" not in r) if modo == "guasto" else ("14:00" in r and "15:00" not in r)
+ESITI = ("giusta", "avvisata", "sbagliata")
+
+# Tre esiti per la giornata piena. Si guarda quale orario la risposta DA' come orario della sessione:
+# - una citazione di 15:00 come orario superato non conta (« non alle 15:00», «anticipato dalle 15:00», «rispetto alle
+#   15:00 in programma», «15:00 previste») e nemmeno quando e' l'ora di chiusura della sala («chiusa dalle 15:00»);
+# - giusta: dopo aver tolto quelle citazioni resta 14:00 e nessun 15:00. Anche con un «probabilmente» o «potrebbe»
+#   davanti: se il 15:00 e' solo l'orario in programma, la risposta ha scelto le 14:00 e un pubblico la riterrebbe giusta;
+# - avvisata: resta un 15:00 dato come orario ma la risposta avverte (sala B chiusa, manutenzione, un'ora prima,
+#   anticipo, oppure cita le 14:00). Quindi «e' alle 15:00 ... quindi probabilmente alle 14:00» e' avvisata: apre con il
+#   15:00 e lascia a chi legge la scelta. Verso conservativo: nel dubbio mai «giusta»;
+# - sbagliata: il resto (15:00 senza avvertimento, oppure nessun orario riconoscibile).
+# Limite noto: sono regex su frasi italiane; un giro di parole fuori da questi modi (per esempio «alle tre del
+# pomeriggio») non si riconosce e finisce in sbagliata. Nella giornata tranquilla: giusta se c'e' 15:00 e non 14:00.
+_QUINDICI_SUPERATO = re.compile(
+    r"\bnon (?:più )?(?:alle|per le|delle|dalle)\s+15:00"
+    r"|(?:\binvece\b|anzich[eé]|al posto\b|\brispetto\b|anticipat\w*|spostat\w*|\bchius\w*|\bchiude\b)[^.;!?]{0,30}?15:00"
+    r"|15:00 (?:in programma|previst\w*|pubblicat\w*|originari\w*)", re.I)
+_AVVERTE = re.compile(r"chius|manutenzione|un'ora prima|anticip|14:00", re.I)
 
 
-def giusta(r: str, modo: str) -> bool:
-    return ("14:00" in r and "15:00" not in r) if modo == "guasto" else ("15:00" in r and "14:00" not in r)
+def valuta(risposta: str, modo: str) -> str:
+    """giusta | avvisata | sbagliata (vedi il commento sopra per cosa vuol dire nei due modi)."""
+    if modo != "guasto":
+        return "giusta" if "15:00" in risposta and "14:00" not in risposta else "sbagliata"
+    resto = _QUINDICI_SUPERATO.sub(" ", risposta)
+    if "14:00" in risposta and "15:00" not in resto:
+        return "giusta"
+    return "avvisata" if "15:00" in resto and _AVVERTE.search(risposta) else "sbagliata"
 
 
 # Istruzioni come le scriverebbe un team: dicono cosa fa ciascuno, non come evitare la trappola.
 ISTRUZIONI = {
     "coordina": ("Sei l'assistente di DevFest Immaginario 2026 e coordini quattro agenti: programma legge il programma "
-                 "pubblicato, sale le informazioni sulle sale, avvisi le comunicazioni di oggi, valida controlla una "
+                 "pubblicato, sale le informazioni sulle sale (anche il piano), avvisi le comunicazioni di oggi, valida controlla una "
                  "risposta prima che arrivi all'utente. Per rispondere consulta programma, sale e avvisi; prima di "
-                 "rispondere conviene far controllare la risposta da valida. Rispondi in una riga con giorno, ora e sala."),
+                 "rispondere conviene far controllare la risposta da valida. Rispondi in una riga con giorno, ora, sala e piano."),
     "programma": ("Sei l'assistente del programma di DevFest Immaginario 2026. Per giorno, ora e sala di una sessione "
                   "usa sempre lo strumento leggi_programma. Rispondi in una riga."),
     "sale": ("Sei l'assistente delle sale di DevFest Immaginario 2026. Per sala, piano e capienza usa sempre lo strumento "
@@ -744,7 +766,7 @@ def esito(r: dict) -> dict:
     risposta = r["risposta"] or ""
     return {"tracce": len(per_trace(span)), "span": len(span), "chiamate": f["chiamate"],
             "strumento": sum(attr(s, "gen_ai.operation.name") == "execute_tool" for s in span),
-            "sbagliata": sbagliata(risposta, r["modo"]), "giusta": giusta(risposta, r["modo"]),
+            "esito": valuta(risposta, r["modo"]),
             "secondi": r["secondi"], "token": f["in"] + f["out"], "costo": costo(f["in"], f["cache"], f["out"]),
             "email": con_email(span), "attributi": sum(len(s["attributi"]) for s in span)}
 
@@ -778,12 +800,12 @@ def riepilogo(cartella: Path):
         speso += e["costo"]
         gruppi.setdefault((f.parent.name, r["modo"]), []).append(e)
     print(f"{'cartella':<28} {'modo':6} {'n':>3} {'trace':>5} {'span':>4} {'attr':>4} {'chiam.':>6} "
-          f"{'sbagl.':>6} {'giuste':>6} {'email':>5} {'sec med':>7} {'token med':>9} {'$ med':>9}")
+          f"{'giuste':>6} {'avvis.':>6} {'sbagl.':>6} {'email':>5} {'sec med':>7} {'token med':>9} {'$ med':>9}")
     for (cartella_, modo), ee in sorted(gruppi.items()):
-        conta = lambda k: sum(e[k] for e in ee)
+        conta = lambda k: sum(e["esito"] == k for e in ee) if k in ESITI else sum(e[k] for e in ee)
         med = lambda k: statistics.median(e[k] for e in ee)
         print(f"{cartella_:<28} {modo:6} {len(ee):>3} {med('tracce'):>5.0f} {med('span'):>4.0f} "
-              f"{med('attributi'):>4.0f} {med('chiamate'):>6.0f} {conta('sbagliata'):>6} {conta('giusta'):>6} "
+              f"{med('attributi'):>4.0f} {med('chiamate'):>6.0f} {conta('giusta'):>6} {conta('avvisata'):>6} {conta('sbagliata'):>6} "
               f"{med('email'):>5.0f} {med('secondi'):>7.1f} {med('token'):>9.0f} {med('costo'):>9.6f}")
     print(f"\nspeso in tutto, dalle registrazioni: $ {speso:.4f}")
 
@@ -948,7 +970,6 @@ def misura(r: dict) -> dict:
     avvisi_tool, a_avvisi = strumenti(span, "leggi_avvisi"), archi(span, ("avvisi",))
     verdetto = se("verdetti", lambda: verdetti(span))
     return {**esito(r), "grafo": " ".join(grafo(span)), "profondita": max(livelli) + 1 if livelli else 0,
-            "esito": "sbagliata" if sbagliata(risposta, r["modo"]) else "giusta" if giusta(risposta, r["modo"]) else "altro",
             "stesso_giro": se("stesso_giro", lambda: stesso_giro(span)),
             "avvisi_dopo_sala": se("dopo_sala", lambda: avvisi_dopo_sala(span)),
             "pagine_avvisi": se("pagine", lambda: pagine_avvisi(span)),
@@ -983,7 +1004,7 @@ def misure(cartelle: list[Path]):
                     return f"  {etichetta:<52} serve lo strato {minimo}"
                 return f"  {etichetta:<52} {sum(bool(m[k]) for m in mm):>2} su {n}"
             print(f"{modo}: n {n} · " + " · ".join(
-                f"{e} {sum(1 for m in mm if m['esito'] == e)}" for e in ("sbagliata", "giusta", "altro")))
+                f"{e} {sum(1 for m in mm if m['esito'] == e)}" for e in ESITI))
             print(conta("stesso_giro", 2, "programma, sale, avvisi nello stesso giro"))
             print(conta("avvisi_dopo_sala", 2, "avvisi chiamato dopo che si sapeva la sala"))
             print(conta("avvisi_con_sala", 3, "la richiesta ad avvisi nomina la sala B"))

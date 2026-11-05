@@ -55,6 +55,8 @@ def numeri(regs: list[dict]) -> dict:
     quota = lambda m: m["quota_avvisi"]
     return {
         "n": len(regs),
+        "giuste": sum(m["esito"] == "giusta" for m in mm) / len(mm),
+        "avvisate": sum(m["esito"] == "avvisata" for m in mm) / len(mm),
         "sbagliate": sum(m["esito"] == "sbagliata" for m in mm) / len(mm),
         "nello stesso giro": sum(m["stesso_giro"] for m in mm) / len(mm),
         "avvisi dopo la sala": sum(m["avvisi_dopo_sala"] for m in mm) / len(mm),

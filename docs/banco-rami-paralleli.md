@@ -30,8 +30,8 @@ Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione` e `s
 | Quota di `avvisi` sui token della richiesta | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `quota di avvisi sui token`); per mediana e 95° percentile `.venv/bin/python segnali.py registrazioni/strato-5` |
 | Costo per agente | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `costo per agente, $ (mediana)`: costo a `LISTINO` delle chiamate al modello di ogni agente) |
 | Quota delle riletture | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `quota delle riletture`). Definizione: in ogni `invoke_agent`, ogni chiamata dopo la prima rilegge la conversazione fin lì; si sommano i token in ingresso della chiamata precedente, e si divide per i token in ingresso di tutta la richiesta |
-| Sbagliate su 30, guasta | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `guasto: n 30 · sbagliata ...`) |
-| Sbagliate su 30, sana | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `sana: n 30 · sbagliata ...`) |
+| Esiti su 30, guasta: giusta / avvisata / sbagliata | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `guasto: n 30 · giusta ... · avvisata ... · sbagliata ...`) |
+| Esiti su 30, sana: giusta / sbagliata | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `sana: n 30 · giusta ... · avvisata 0 · sbagliata ...`) |
 | Run in cui `avvisi` omette l'avviso | `[banco]` | `.venv/bin/python strati.py --misure 5` (righe `leggi_avvisi ha restituito l'avviso sulla sala B` contro `avvisi lo riporta a coordina`) |
 | Verdetti di `valida` | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `valida approva`); `.venv/bin/python segnali.py registrazioni/strato-5` |
 | Run con i tre rami nello stesso giro | `[banco]` | `.venv/bin/python strati.py --misure 5` (riga `programma, sale, avvisi nello stesso giro`) |
@@ -41,6 +41,14 @@ Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione` e `s
 
 `--misure 5` stampa insieme `strato-5`, `strato-5-correzione` e `strato-5-correzione-completa`, ognuna con le
 giornate `guasto` e `sana` che contiene.
+
+## I tre esiti
+
+Nella giornata piena una risposta è `giusta` se dà le 14:00 come orario (il 15:00 solo come orario in programma
+superato), `avvisata` se dà le 15:00 ma avverte della chiusura della sala B o dell'anticipo, `sbagliata` se dà le
+15:00 senza avvertimenti. Nella tranquilla: `giusta` se dà le 15:00 senza dire 14:00, `sbagliata` altrimenti. Il
+rilevatore è `valuta()` in `strati.py`, con le regole e il limite noto (regex su frasi italiane) nel commento sopra.
+Il cruscotto Grafana non mostra gli esiti: sono un conteggio del banco (`--misure`, `controllo.py`).
 
 ## Il fatto sull'SDK
 
