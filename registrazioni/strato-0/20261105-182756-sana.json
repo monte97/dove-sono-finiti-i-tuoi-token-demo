@@ -1,0 +1,20 @@
+{
+ "strato": 0,
+ "correzione": 0,
+ "maschera": false,
+ "registrata": "2026-11-05T18:27:56",
+ "modo": "sana",
+ "modello": "claude-haiku-5-5",
+ "domanda": "Ciao, sono Giulia Rossi (giulia.rossi@example.com). A che ora è il workshop Kubernetes da zero?",
+ "risposta": "Ciao Giulia, il workshop \"Kubernetes da zero\" si tiene oggi alle 15:00 nella sala B, al piano 1.",
+ "log": "18:27:56 INFO POST /chiedi 200 in 18.3 s",
+ "fattura": {
+  "chiamate": 18,
+  "in": 17202,
+  "cache": 0,
+  "out": 2045
+ },
+ "secondi": 18.25007341708988,
+ "span": [],
+ "log_otel": []
+}
