@@ -61,7 +61,7 @@
    "id": 2,
    "type": "stat",
    "title": "valida approva",
-   "description": "Archi verso valida il cui risultato chiude con «Verificato.», su tutti i verdetti: dagli span, non dal riassunto.",
+   "description": "Archi verso valida il cui risultato apre o chiude con «Verificato.», su tutti i verdetti: dagli span, non dal riassunto.",
    "datasource": {
     "type": "tempo",
     "uid": "tempo"
@@ -81,7 +81,7 @@
      },
      "queryType": "traceql",
      "metricsQueryType": "range",
-     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" } >> { span.gen_ai.transfer.target.name = \"valida\" && span.gen_ai.tool.call.result =~ \"(?s).*Verificato\\\\.[\\\\s\\\"'»*]*\" } | count_over_time()",
+     "query": "{ span.banco.cartella = \"$cartella\" && span.banco.modo = \"$modo\" } >> { span.gen_ai.transfer.target.name = \"valida\" && span.gen_ai.tool.call.result =~ \"(?s)[\\\\s\\\"'«*]*Verificato\\\\..*|.*Verificato\\\\.[\\\\s\\\"'»*]*\" } | count_over_time()",
      "step": "60s"
     }
    ],

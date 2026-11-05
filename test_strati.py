@@ -391,6 +391,42 @@ def test_tre_esiti_giornata_piena():
     assert v("Oggi alle 15:00, sala B, piano 1.") == "sbagliata"
 
 
+def test_causa_solo_se_parla_della_sala_b_o_dell_anticipo():
+    v = lambda r: s.valuta(r, "guasto")
+    # rumore: chiusura o chiusure che non sono la sala B. Prima passavano per un avvertimento.
+    for frase in ("Oggi alle 15:00 in sala B. La keynote di chiusura è alle 18:00.",
+                  "Oggi alle 15:00 in sala B, piano 1. La sala C chiude alle 17.",
+                  "Alle 15:00, sala B. Il banco accrediti è in manutenzione fino a mezzogiorno.",
+                  "Oggi alle 15:00 in sala B; la cerimonia di chiusura è in sala A."):
+        assert v(frase) == "sbagliata", frase
+    # e nell'altro verso: la sala B (nella frase) con la sua causa, oppure l'anticipo, avvertono
+    assert v("Oggi alle 15:00 in sala B, ma la sala B chiude per manutenzione.") == "avvisata"
+    assert v("Oggi alle 15:00 in sala B, ma c'è un avviso di chiusura della sala B.") == "avvisata"
+    assert v("Oggi alle 15:00 in sala B. Le sessioni del pomeriggio iniziano un'ora prima.") == "avvisata"
+    assert v("Oggi alle 15:00 in sala B. Le sessioni pomeridiane sono state anticipate.") == "avvisata"
+    # la sala B chiusa, nella stessa frase
+    assert v("Oggi alle 15:00 in sala B. La sala B è chiusa dalle 15:00.") == "avvisata"
+    # il rumore non toglie l'avvertimento vero che sta in un'altra frase
+    assert v("Oggi alle 15:00 in sala B. La keynote di chiusura è alle 18:00. Ma la sala B chiude per manutenzione.") == "avvisata"
+
+
+def test_quindici_superato_nelle_forme_dei_banchi_veri():
+    v = lambda r: s.valuta(r, "guasto")
+    # risposte vere del banco del 5/11 (registrazioni/strato-3 195128, strato-5-correzione-dialogo 210656)
+    assert v('Il workshop è oggi alle 14:00 in sala B, al piano 1: il programma lo dava alle 15:00, ma per un avviso di oggi '
+             'le sessioni del pomeriggio in sala B iniziano un\'ora prima per manutenzione dell\'impianto elettrico.') == "giusta"
+    assert v("Oggi alle 14:00 in sala B, piano 1: il programma prevedeva le 15:00, ma per manutenzione elettrica le sessioni "
+             "pomeridiane in sala B sono anticipate di un'ora.") == "giusta"
+    assert v("Alle 14:00 in sala B. Il programma lo metteva alle 15:00.") == "giusta"
+    assert v("Alle 14:00 in sala B, non alle 15:00 previste dal programma.") == "giusta"
+    assert v("Alle 14:00 in sala B. In programma era alle 15:00.") == "giusta"
+    # ma un 15:00 dato come orario, anche citando il programma al presente, non e' superato
+    assert v("Il programma prevede le 15:00 in sala B.") == "sbagliata"
+    assert v("Il programma lo dà alle 15:00, in sala B.") == "sbagliata"
+    assert v("Il programma indica le 15:00 in sala B, ma non posso confermarlo: potrebbe essere alle 14:00.") == "avvisata"
+    assert v("Il workshop è alle 15:00 in sala B, come prevedeva il programma. Nessun avviso.") == "sbagliata"
+
+
 def test_due_esiti_giornata_tranquilla():
     v = lambda r: s.valuta(r, "sana")
     assert v("Si tiene oggi alle 15:00 nella sala B. Non risultano variazioni.") == "giusta"
@@ -501,6 +537,19 @@ def test_approva_solo_un_verificato_in_fondo():
     assert not s.approva("Non posso aggiungere «Verificato.» alla versione attuale.")
     assert not s.approva("Il dato potrebbe non essere aggiornato, conviene verificarlo presso la segreteria.")
     assert not s.approva("Conviene verificare sul programma ufficiale orario, sala e giorno.")
+    # in apertura, come ha fatto valida nel banco del 5/11 (archivio/taratura-2026-11-05/giro-3 182416)
+    assert s.approva("Verificato. Il workshop \"Kubernetes da zero\" si tiene oggi alle 15:00 in sala B, al piano 1.")
+    assert s.approva("Verificato.\n\nIl workshop si tiene oggi alle 15:00 nella sala B, al piano 1.")
+    assert s.approva("**Verificato.** Il workshop si tiene oggi alle 15:00 in sala B.")
+    assert s.approva("«Verificato.» Il workshop si tiene oggi alle 15:00 in sala B.")
+    assert s.approva("  \"Verificato.\"\nOggi alle 15:00.")
+    # rifiuti veri (giro-3 182539 e 182614, banco 28/10) che citano «Verificato.» senza approvare
+    assert not s.approva("Non aggiungo «Verificato.» perché il contesto segnala che il dato non è aggiornato.")
+    assert not s.approva("**Dato da confermare.** Non scrivo «Verificato.» perché il contesto non è aggiornato.")
+    assert not s.approva("**Non verificato.** La risposta non è coerente con il contesto.")
+    assert not s.approva("La risposta non può essere approvata come \"Verificato.\" perché il dato non è aggiornato.")
+    assert not s.approva("Il dato va confermato, quindi non ho aggiunto «Verificato.».\n\nIl contesto indica 26 ore fa.")
+    assert not s.approva("Il dato è verificato. Oggi alle 15:00.")
 
 
 def test_replay_registrazione_dello_spike():

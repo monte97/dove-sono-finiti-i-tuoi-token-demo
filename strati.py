@@ -311,21 +311,32 @@ _QUINDICI_SUPERATO = re.compile(
     r"|(?:\binvece\b|anzich[eé]|al posto\b|\brispetto\b|anticipat\w*|spostat\w*|\bchius\w*|\bchiude\b)[^.;!?]{0,30}?15:00"
     r"|15:00 (?:in programma|previst\w*|pubblicat\w*|originari\w*)"
     r"|\bprogramma (?:indicava|diceva|riportava|dava|segnava)\s+(?:le\s+|alle\s+)?15:00"
+    r"|\b(?:lo\s+)?(?:dava|prevedeva|metteva|segnava|indicava)\s+(?:le\s+|alle\s+)?15:00"  # «il programma lo dava alle 15:00»
+    r"|15:00\s+(?:erano\s+|era\s+)?previst[oae]\s+(?:dal|nel|sul)\s+programma"  # «le 15:00 previste dal programma»
+    r"|previst[oae]\s+(?:dal|nel)\s+programma[^.;!?]{0,12}?15:00"  # «previsto dal programma alle 15:00»
     r"|(?:previst[oa]|era)\s+alle\s+15:00\s+nel\s+programma"
+    r"|\bin\s+programma\s+(?:era|c'era)\s+(?:alle\s+|le\s+)?15:00"  # «in programma era alle 15:00»: passato, superato
     r"|15:00 (?:era|erano)\s+l'orario\s+(?:del|in|nel)\s+programma", re.I)
-# Cosa vale come avvertimento: una causa (chiusura, manutenzione, un'ora prima, anticipo) oppure le 14:00 presentate
-# come possibili o probabili. Una 14:00 nuda non avverte («il 14:00 e' il pranzo»). Una negazione che regge la causa nella
-# stessa clausola la toglie, come in riporta_avviso: «nessun avviso di chiusura», «non risulta che sia chiusa»,
-# «nessuna anticipazione prevista», «non alle 14:00».
-_CAUSA = re.compile(r"chius|chiud|manutenzion|un.ora prima|anticip|\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil|indisponibil", re.I)
+# Cosa vale come avvertimento: una causa oppure le 14:00 presentate come possibili o probabili. Una causa e' una di due
+# cose, nella stessa frase o clausola, come in riporta_avviso: la sala B chiusa o in manutenzione («sala B» nella frase e
+# chiusura, manutenzione, non disponibile nella clausola), oppure le sessioni pomeridiane portate avanti («un'ora prima»,
+# «anticipat»). «La keynote di chiusura e' alle 18:00» o «la sala C chiude alle 17» non sono una causa: parlano d'altro.
+# Una 14:00 nuda non avverte («il 14:00 e' il pranzo»). Una negazione che regge la causa nella stessa clausola la toglie:
+# «nessun avviso di chiusura», «non risulta che sia chiusa», «nessuna anticipazione prevista», «non alle 14:00».
+# Limite noto: «sala B» in una frase e la chiusura in un'altra («E' in sala B. Chiude alle 15.») non si legano
+# (verso conservativo: sbagliata, non avvisata).
+_CAUSA_SALA = re.compile(r"chius|chiud|manutenzion|\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil|indisponibil", re.I)
+_CAUSA_ANTICIPO = re.compile(r"un.ora prima|anticip", re.I)
 _QUATTORDICI_POSSIBILE = re.compile(r"(?:potrebbe|probabilmente|forse|dovrebbe|magari)[^.;!?]{0,30}?14:00", re.I)
 
 
 def _avverte(risposta: str) -> bool:
     for f in re.split(r"[.!?;\n]+", risposta):
+        sala_b = AVVISI_SALA_B.search(f) is not None
         for k in _clausole(f):
             negazioni = list(AVVISI_NEGA.finditer(k))
-            spie = [m.start() for rx in (_CAUSA, _QUATTORDICI_POSSIBILE) for m in rx.finditer(k)]
+            spie = [m.start() for rx in ((_CAUSA_SALA,) if sala_b else ()) + (_CAUSA_ANTICIPO, _QUATTORDICI_POSSIBILE)
+                    for m in rx.finditer(k)]
             if any(not any(n.end() <= p for n in negazioni) for p in spie):
                 return True
     return False
@@ -870,9 +881,17 @@ def riepilogo(cartella: Path):
 
 # --- misure del grafo: cosa ha deciso il modello, run per run ---
 
+# Il verdetto di valida: «Verificato.» in fondo (come chiede l'istruzione) oppure in apertura, magari in grassetto o fra
+# virgolette («Verificato. Il workshop...»): il banco del 5/11 ha mostrato che a volte lo scrive prima. Un rifiuto che lo
+# cita («Non aggiungo «Verificato.» perche'...») ha altro prima e altro dopo: non approva. Stessa regola, riga per riga,
+# in verdetti() e nella query del cruscotto (cruscotto/grafana/segnali.json, pannello «valida approva»).
+APPROVA = re.compile(r"[\s\"'«*]*Verificato\..*|.*Verificato\.[\s\"'»*]*", re.S)
+
+
 def approva(testo: str) -> bool:
-    """valida approva quando chiude con «Verificato.»: chi lo cita per rifiutarlo, o scrive «verificare», non approva."""
-    return testo.rstrip(" \n\"'»*").endswith("Verificato.")
+    """valida approva quando «Verificato.» e' l'ultima cosa o la prima: chi lo cita per rifiutarlo, o scrive
+    «verificare», non approva. Limite noto: un rifiuto che apre con «Verificato.» e poi obietta conta come approvato."""
+    return bool(APPROVA.fullmatch(testo))
 
 
 # I thread di uno stesso giro partono a pochi millisecondi uno dall'altro: se uno strumento istantaneo (leggi_programma)

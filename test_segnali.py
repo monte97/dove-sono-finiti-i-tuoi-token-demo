@@ -331,6 +331,25 @@ def test_costo_per_agente_e_riletture():
     assert s.misura({**reg, "strato": 1})["riletture"] is None and s.misura({**reg, "strato": 1})["costo_agente"] is None
 
 
+def test_la_query_del_cruscotto_approva_come_approva():
+    """Il pannello «valida approva» e s.approva devono dire lo stesso su ogni verdetto: stessa regex, anche sui testi veri."""
+    import json
+    import re
+    from pathlib import Path
+    pannelli = json.loads((s.QUI / "cruscotto" / "grafana" / "segnali.json").read_text())["panels"]
+    q = next(t["query"] for p in pannelli for t in p.get("targets", []) if t["refId"] == "approvati")
+    rx = re.compile(re.search(r'tool\.call\.result =~ "(.*?)" \}', q).group(1).replace("\\\\", "\\").replace('\\"', '"'))
+    casi = ["Oggi alle 15:00. Verificato.", "Oggi alle 15:00.\n\nVerificato.**", "Verificato. Oggi alle 15:00 in sala B.",
+            "Verificato.\n\nOggi alle 15:00.", "**Verificato.** Oggi.", "«Verificato.» Oggi.",
+            "Non aggiungo «Verificato.» perché il dato non è aggiornato.", "**Non verificato.** Incoerente.",
+            "Il dato va confermato, quindi non ho aggiunto «Verificato.».\n\nIl contesto indica 26 ore fa.", "Conviene verificare."]
+    for f in sorted((s.QUI / "registrazioni").rglob("*.json")):  # e i verdetti veri del banco
+        casi += [s.attr(x, "gen_ai.tool.call.result") or "" for x in s.archi(json.loads(f.read_text())["span"], ("valida",))]
+    assert len(casi) > 100
+    for testo in casi:
+        assert bool(rx.fullmatch(testo)) == s.approva(testo), testo[:120]
+    assert sum(s.approva(t) for t in casi[:10]) == 6  # i primi dieci: sei approvano, quattro no
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):
