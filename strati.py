@@ -769,17 +769,27 @@ def grafo(span) -> list[str]:
 MINIMO_MISURE = {"stesso_giro": 2, "dopo_sala": 2, "token": 2, "letto": 3, "riporta": 3, "verdetti": 3, "email_valida": 3,
                  "pagine": 4}
 AVVISI_SALA_B = re.compile(r"sala B", re.I)
-# la causa legata alla sala (non «chiusura» da sola: «keynote di chiusura» e' rumore), e le negazioni
-AVVISI_CAUSA = re.compile(r"\bchius[ao]\b|\bchiud\w+|manutenzion|un.ora prima|anticipat", re.I)
-AVVISI_NEGA = re.compile(r"\bnon\b|\bnessun\w*|\bniente\b", re.I)
+# la causa legata alla sala (non «chiusura» da sola: «keynote di chiusura» e' rumore)
+AVVISI_CAUSA = re.compile(r"\bchius[ao]\b|\bchiud\w+|manutenzion|un.ora prima|anticipat|"
+                          r"\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil\w*|indisponibil", re.I)
+# una negazione che regge la causa: sta PRIMA e dice che l'avviso o la chiusura non c'e'
+AVVISI_NEGA = re.compile(r"\bnessun\w*|\bnon\s+(?:risult\w+|ci\s+sono|c'è|vi\s+è|vi\s+sono|è\s+previst\w+|"
+                         r"sono\s+previst\w+|è|sarà|sono)\s+", re.I)
 
 
 def riporta_avviso(testo: str) -> bool:
-    """Una frase dice che la sala B e' chiusa o che le sessioni anticipano: «sala B» e la causa nella stessa frase,
-    e nessuna negazione nella frase. Limite noto: una parafrasi senza nessuna di queste parole (es. «la B chiude presto»,
-    «la sala B non si usa dalle 15») non viene riconosciuta; una negazione nella frase fa scartare anche un riporto vero."""
-    return any(AVVISI_SALA_B.search(f) and AVVISI_CAUSA.search(f) and not AVVISI_NEGA.search(f)
-               for f in re.split(r"[.!?;\n]+", testo))
+    """Una frase dice che la sala B e' chiusa o che le sessioni anticipano: «sala B» e una causa nella stessa frase.
+    Una negazione scarta la causa solo se sta prima di essa e la regge («nessun avviso di chiusura», «non risultano
+    manutenzioni», «non è chiusa»); dopo la causa o su altro («non alle 16») non conta, e «non sarà disponibile» e'
+    una causa. Limite noto: una parafrasi senza nessuna di queste parole (es. «la sala B si
+    ferma alle 15») non viene riconosciuta."""
+    for f in re.split(r"[.!?;\n]+", testo):
+        if not AVVISI_SALA_B.search(f):
+            continue
+        negazioni = list(AVVISI_NEGA.finditer(f))
+        if any(not any(n.end() <= c.start() for n in negazioni) for c in AVVISI_CAUSA.finditer(f)):
+            return True
+    return False
 
 
 def archi(span, verso=None) -> list:
