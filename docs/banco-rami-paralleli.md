@@ -68,6 +68,45 @@ nel cruscotto, `segnali.py`) conta solo le pagine lette da `leggi_avvisi` sotto 
 è il numero della slide, 40 nella giornata piena. `pagine_ricontrolli` (riga `pagine di avvisi nei ricontrolli`) conta le
 letture sotto qualunque altro chiamante: i ricontrolli di `valida` e il dialogo.
 
+## Lo schema del sistema
+
+Il grafo di chi chiama chi, aggregato sulle registrazioni (dallo strato 2 in su; sotto stampa «serve lo strato 2»):
+
+```bash
+.venv/bin/python strati.py --schema registrazioni/strato-5                 # testo leggibile e blocco Mermaid
+.venv/bin/python strati.py --schema registrazioni/strato-5 --modo guasto   # solo la giornata piena (o sana)
+.venv/bin/python strati.py --schema registrazioni/strato-5 --senza-strumenti   # senza le foglie leggi_*
+```
+
+Il testo dice, per ogni arco chiamante → chiamato, in quante run compare e quante volte in totale, e in fondo i
+rimpalli: un agente chiamato da due chiamanti nella stessa run, `valida` che richiama una fonte (e se la risposta di
+`avvisi` riporta l'avviso sulla sala B, dallo strato 3), `avvisi` che chiede a `programma` (dialogo) e la guardia dei
+cicli. Il blocco `flowchart LR` si incolla in una slide: gli archi hanno l'etichetta «run/run totali» (`30/30` = in 30
+run su 30) e «×N» se in media l'arco è percorso più volte per run; i rimpalli sono tratteggiati e rossi.
+
+Esempio dell'uscita Mermaid, su registrazioni finte del server di test (**non sono numeri reali**):
+
+```mermaid
+flowchart LR
+  %% legenda: ogni arco e' «in quante run su quante» (×N = volte per run, in media);
+  %% tratteggiato rosso = rimpallo (stesso dato per due strade, valida che ricontrolla, avvisi che chiede a programma, guardia)
+  utente([utente])
+  coordina[coordina]
+  programma[programma]
+  sale[sale]
+  avvisi[avvisi]
+  valida[valida]
+  utente -->|3/3| coordina
+  coordina -->|3/3| programma
+  coordina -->|3/3| sale
+  coordina -->|3/3| avvisi
+  coordina -->|3/3| valida
+  programma -.->|3/3 ×2| sale
+  valida -.->|3/3| programma
+  valida -.->|3/3| avvisi
+  linkStyle 5,6,7 stroke:#c0392b,stroke-width:2px,color:#c0392b
+```
+
 ## I tre esiti
 
 Nella giornata piena una risposta è `giusta` se dà le 14:00 come orario (il 15:00 solo come orario in programma

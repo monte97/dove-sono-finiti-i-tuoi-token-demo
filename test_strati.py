@@ -837,6 +837,101 @@ def test_codice_2_resta_pulito_con_la_guardia():
     assert 'span.set_attribute("error.type", "ciclo")' in s.codice(2)
 
 
+def cartella_finta(n_guasto=2, n_sana=0, correzione=0, strato=5, **scelte):
+    """Una cartella temporanea di registrazioni finte: n_guasto run in modo guasto, n_sana in modo sana."""
+    cartella = Path(tempfile.mkdtemp()) / f"strato-{strato}"
+    cartella.mkdir(parents=True)
+    for i in range(n_guasto + n_sana):
+        reg, _ = corri_annidato(strato=strato, correzione=correzione, guasto=i < n_guasto, **scelte)
+        (cartella / f"{i}.json").write_text(json.dumps(reg))
+    return cartella
+
+
+def schema_di(cartella, **opzioni):
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        s.mostra_schema(cartella, **opzioni)
+    return fuori.getvalue()
+
+
+def test_schema_conteggi_e_rimpalli():
+    cartella = cartella_finta(3, annidate=True, valida_sala=True)
+    testo = schema_di(cartella)
+    assert "3 run, strato 5" in testo
+    assert "utente → coordina" in testo
+    for riga in ("coordina → programma", "coordina → avvisi", "coordina → valida", "programma → sale", "valida → avvisi"):
+        assert re.search(rf"{riga}\s+3 su 3 · +\d+ volte", testo), riga
+    assert re.search(r"coordina → sale\s+3 su 3", testo)
+    assert "sale chiamato da 2 chiamanti (coordina, programma): 3 run su 3" in testo
+    assert "valida richiama avvisi: 3 run su 3" in testo and "valida richiama programma: 3 run su 3" in testo
+    assert "riporta l'avviso sulla sala B: 3 run su 3" in testo  # valida_sala: il ricontrollo nomina la sala
+    assert "avvisi chiede a programma (dialogo): 0 run su 3" in testo
+    assert "guardia dei cicli scattata: 0 run su 3 · 0 volte" in testo
+    assert re.search(r"coordina → leggi_\w+", testo) is None and "avvisi → leggi_avvisi" in testo  # gli strumenti sono foglie dell'agente
+    assert "strumenti dei dati" in testo and "strumenti dei dati" not in schema_di(cartella, senza_strumenti=True)
+    assert "leggi_avvisi" not in schema_di(cartella, senza_strumenti=True)
+    # senza chiamate annidate: nessun rimpallo
+    semplice = schema_di(cartella_finta(2))
+    assert "nessun agente chiamato da piu' chiamanti" in semplice and "valida richiama avvisi: 0 run su 2" in semplice
+
+
+def test_schema_dialogo_e_guardia():
+    testo = schema_di(cartella_finta(2, correzione=3, dialogo=True, ciclo="avvisi"))
+    assert "avvisi chiede a programma (dialogo): 2 run su 2" in testo
+    assert "guardia dei cicli scattata: 2 run su 2 · 2 volte" in testo
+    assert re.search(r"\*programma → avvisi\s+2 su 2", testo)  # l'arco respinto dalla guardia e' un rimpallo
+    mermaid = testo.split("```mermaid\n")[1]
+    assert "avvisi -.->|2/2| programma" in mermaid and "programma -.->|2/2| avvisi" in mermaid
+
+
+def test_schema_mermaid_stabile_e_valido():
+    cartella = cartella_finta(2, annidate=True, valida_sala=True)
+    uno = schema_di(cartella)
+    assert uno == schema_di(cartella)  # stabile
+    blocco = uno.split("```mermaid\n")[1].split("```")[0].rstrip("\n").splitlines()
+    assert blocco[0] == "flowchart LR" and sum(r.strip().startswith("%%") for r in blocco) == 2
+    archi_ = [r.strip() for r in blocco if "-->" in r or "-.->" in r]
+    for r in archi_:
+        assert re.fullmatch(r"\w+ (-->|-\.->)\|[^|]+\| \w+", r), r
+    assert "utente -->|2/2| coordina" in archi_
+    assert "coordina -->|2/2| avvisi" in archi_
+    assert "programma -.->|2/2 ×2| sale" in archi_ and "valida -.->|2/2| avvisi" in archi_  # rimpalli tratteggiati
+    assert "coordina -->|2/2| sale" in archi_  # la strada normale resta piena
+    # linkStyle: gli indici sono quelli degli archi tratteggiati (numerati dal primo arco scritto)
+    stile = next(r for r in blocco if r.strip().startswith("linkStyle")).split()[1].split(",")
+    scritti = [r for r in blocco if "-->" in r or "-.->" in r]
+    assert [i for i, r in enumerate(scritti) if "-.->" in r] == [int(i) for i in stile]
+    nodi = [r.strip() for r in blocco if re.fullmatch(r"\s+\w+(\[\w+\]|\(\[\w+\]\))", r)]
+    assert nodi == ["utente([utente])", "coordina[coordina]", "programma[programma]", "sale[sale]", "avvisi[avvisi]", "valida[valida]"]
+
+
+def test_schema_volte_per_run_nell_etichetta():
+    regs = [json.loads(f.read_text()) for f in sorted(cartella_finta(1).glob("*.json"))]
+    sdoppiato = json.loads(json.dumps(regs[0]))
+    # una chiamata in piu' coordina → sale nella stessa run: 2 volte, in 1 run
+    x = next(y for y in sdoppiato["span"] if s.attr(y, "gen_ai.transfer.target.name") == "sale")
+    y = json.loads(json.dumps(x))
+    y["id"] = "duplicato"
+    sdoppiato["span"].append(y)
+    _, mermaid = s.schema([sdoppiato])
+    assert "coordina -->|1/1 ×2| sale" in mermaid and "coordina -->|1/1| programma" in mermaid
+
+
+def test_schema_filtra_per_modo():
+    cartella = cartella_finta(n_guasto=2, n_sana=1, annidate=True)
+    assert "3 run" in schema_di(cartella)
+    assert "2 run, strato 5" in schema_di(cartella, modo="guasto")
+    assert "1 run, strato 5" in schema_di(cartella, modo="sana")
+    assert "nessuna registrazione in modo sana" in schema_di(cartella_finta(2), modo="sana")
+
+
+def test_schema_sotto_lo_strato_2_e_sotto_il_3():
+    assert "serve lo strato 2" in schema_di(cartella_finta(1, strato=1))
+    testo = schema_di(cartella_finta(1, strato=2, annidate=True))
+    assert "2 run" not in testo and "strato 2" in testo and "```mermaid" in testo
+    assert "riporta l'avviso sulla sala B: serve lo strato 3" in testo
+    assert "serve lo strato 2" not in testo
+
+
 if __name__ == "__main__":
     for nome, prova in list(globals().items()):
         if nome.startswith("test_"):

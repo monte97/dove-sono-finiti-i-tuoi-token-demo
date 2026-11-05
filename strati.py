@@ -1209,6 +1209,138 @@ def misure(cartelle: list[Path]):
         print()
 
 
+# --- lo schema del sistema: il grafo delle chiamate fra agenti, aggregato sulle run ---
+
+ORDINE_NODI = ("utente", "coordina", "programma", "sale", "avvisi", "valida")  # l'ordine in cui si disegnano
+
+
+def _ordine(nome: str):
+    return (ORDINE_NODI.index(nome), nome) if nome in ORDINE_NODI else (len(ORDINE_NODI), nome)
+
+
+def archi_della_run(span) -> dict:
+    """Per una run: {(chiamante, chiamato): quante volte}, con gli strumenti dei dati (leggi_*) come foglie.
+    Il chiamante di uno strumento dei dati e' l'agente dell'invoke_agent che lo contiene."""
+    per_id, fuori = {x["id"]: x for x in span}, {}
+    for x in span:
+        if attr(x, "gen_ai.operation.name") != "execute_tool":
+            continue
+        if attr(x, "gen_ai.transfer.target.name"):
+            chiave = (attr(x, "gen_ai.agent.name"), attr(x, "gen_ai.transfer.target.name"))
+        else:
+            padre = per_id.get(x["padre"])
+            chiave = (attr(padre, "gen_ai.agent.name") if padre else None, attr(x, "gen_ai.tool.name"))
+        if chiave[0] and chiave[1]:
+            fuori[chiave] = fuori.get(chiave, 0) + 1
+    return fuori
+
+
+def _agenti(span) -> set:
+    return {attr(x, "gen_ai.agent.name") for x in span if attr(x, "gen_ai.operation.name") == "invoke_agent"}
+
+
+def schema(regs: list[dict], senza_strumenti: bool = False) -> tuple[str, str]:
+    """(testo, mermaid) dello schema delle chiamate, sulle registrazioni date (tutte dallo strato 2 in su)."""
+    n = len(regs)
+    strato = min(r["strato"] for r in regs)
+    archi_run = [archi_della_run(r["span"]) for r in regs]
+    agenti = set().union(*(_agenti(r["span"]) for r in regs)) | {"coordina"}
+    arco = {}  # (da, a) -> [run in cui compare, volte in totale]
+    for ar in archi_run:
+        for k, v in ar.items():
+            e = arco.setdefault(k, [0, 0])
+            e[0] += 1
+            e[1] += v
+    # rimpalli: chi e' chiamato da due chiamanti diversi nella stessa run; i chiamanti extra (non coordina) sono l'arco del rimpallo
+    due_chiamanti, extra = {}, set()
+    for ar in archi_run:
+        chiamanti = {}
+        for (da, a) in ar:
+            if a in agenti:
+                chiamanti.setdefault(a, set()).add(da)
+        for a, ds in chiamanti.items():
+            if len(ds) >= 2:
+                due_chiamanti.setdefault(a, [0, set()])
+                due_chiamanti[a][0] += 1
+                due_chiamanti[a][1] |= ds
+                extra |= {(d, a) for d in ds if d != "coordina"}
+    guardie = [(r, [x for x in archi(r["span"]) if attr(x, "error.type") == "ciclo"]) for r in regs]
+    arco_guardia = {(attr(x, "gen_ai.agent.name"), attr(x, "gen_ai.transfer.target.name")) for _, g in guardie for x in g}
+    rimpalli = {k for k in arco if k[0] == "valida" or k == ("avvisi", "programma")} | extra | arco_guardia
+    rimpalli = {k for k in rimpalli if k in arco}
+
+    # --- il testo ---
+    righe = [f"schema del sistema: {n} run, strato {strato}", "", "chi chiama chi (in quante run · volte in totale)"]
+    righe.append(f"   {'utente → coordina':<28} {n:>3} su {n} · {n:>3} volte")
+    ordinati = sorted((k for k in arco if k[1] in agenti), key=lambda k: (_ordine(k[0]), _ordine(k[1])))
+    for k in ordinati:
+        segno = "  *" if k in rimpalli else "   "
+        righe.append(f"{segno}{k[0] + ' → ' + k[1]:<28} {arco[k][0]:>3} su {n} · {arco[k][1]:>3} volte")
+    foglie = sorted((k for k in arco if k[1] not in agenti), key=lambda k: (_ordine(k[0]), k[1]))
+    if foglie and not senza_strumenti:
+        righe.append("  strumenti dei dati")
+        for k in foglie:
+            righe.append(f"     {k[0] + ' → ' + k[1]:<28} {arco[k][0]:>3} su {n} · {arco[k][1]:>3} volte")
+    righe += ["", "rimpalli (* nell'elenco sopra)"]
+    for a in sorted(due_chiamanti, key=_ordine):
+        righe.append(f"  {a} chiamato da {len(due_chiamanti[a][1])} chiamanti ({', '.join(sorted(due_chiamanti[a][1], key=_ordine))}): "
+                     f"{due_chiamanti[a][0]} run su {n}")
+    if not due_chiamanti:
+        righe.append(f"  nessun agente chiamato da piu' chiamanti nella stessa run: 0 run su {n}")
+    for fonte in ("avvisi", "programma"):
+        k = ("valida", fonte)
+        righe.append(f"  valida richiama {fonte}: {arco[k][0] if k in arco else 0} run su {n}")
+        if fonte == "avvisi":
+            if strato < MINIMO_MISURE["valida_riporta"]:
+                righe.append("    ...e la risposta riporta l'avviso sulla sala B: serve lo strato 3")
+            else:
+                riportano = sum(any(riporta_avviso(attr(x, "gen_ai.tool.call.result", "")) for x in archi(r["span"], ("avvisi",), da="valida"))
+                                for r in regs)
+                righe.append(f"    ...e la risposta riporta l'avviso sulla sala B: {riportano} run su {n}")
+    k = ("avvisi", "programma")
+    righe.append(f"  avvisi chiede a programma (dialogo): {arco[k][0] if k in arco else 0} run su {n}")
+    righe.append(f"  guardia dei cicli scattata: {sum(bool(g) for _, g in guardie)} run su {n} · {sum(len(g) for _, g in guardie)} volte")
+
+    # --- Mermaid ---
+    def etichetta(k):
+        run, volte = arco[k]
+        media = volte / run
+        return f"{run}/{n}" + (f" ×{media:g}" if media > 1 else "")
+    mm = ["flowchart LR", "  %% legenda: ogni arco e' «in quante run su quante» (×N = volte per run, in media);",
+          "  %% tratteggiato rosso = rimpallo (stesso dato per due strade, valida che ricontrolla, avvisi che chiede a programma, guardia)"]
+    nodi = sorted(agenti, key=_ordine)
+    mm.append("  utente([utente])")
+    mm += [f"  {a}[{a}]" for a in nodi]
+    mm.append(f"  utente -->|{n}/{n}| coordina")
+    stile = []
+    for i, k in enumerate(ordinati, start=1):
+        punta = "-.->" if k in rimpalli else "-->"
+        mm.append(f"  {k[0]} {punta}|{etichetta(k)}| {k[1]}")
+        if k in rimpalli:
+            stile.append(i)
+    if stile:
+        mm.append(f"  linkStyle {','.join(map(str, stile))} stroke:#c0392b,stroke-width:2px,color:#c0392b")
+    return "\n".join(righe), "\n".join(mm)
+
+
+def mostra_schema(cartella: Path, modo: str | None = None, senza_strumenti: bool = False):
+    if not cartella.is_dir():
+        raise SystemExit(f"{cartella}: non e' una cartella di registrazioni")
+    regs = [json.loads(f.read_text()) for f in sorted(cartella.glob("*.json"))]
+    if not regs:
+        raise SystemExit(f"{cartella}: nessuna registrazione")
+    if min(r["strato"] for r in regs) < 2:
+        print("lo schema delle chiamate serve lo strato 2: sotto non ci sono gli span degli agenti")
+        return
+    regs = [r for r in regs if modo is None or r["modo"] == modo]
+    if not regs:
+        print(f"nessuna registrazione in modo {modo}")
+        return
+    testo, mermaid = schema(regs, senza_strumenti)
+    print(testo)
+    print("\n```mermaid\n" + mermaid + "\n```")
+
+
 def righe():
     """Le righe di codice di ogni strato, contate dai marcatori sN dopo il cancelletto."""
     testo = Path(__file__).read_text().splitlines()
@@ -1255,10 +1387,15 @@ if __name__ == "__main__":
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
     p.add_argument("--misure", type=int, metavar="STRATO", help="le misure della giornata piena e della tranquilla in uno strato")
+    p.add_argument("--schema", metavar="CARTELLA", help="il grafo delle chiamate fra agenti sulle registrazioni (strato 2+), in testo e Mermaid")
+    p.add_argument("--modo", choices=("guasto", "sana"), help="con --schema: solo le run di quel modo")
+    p.add_argument("--senza-strumenti", action="store_true", help="con --schema: nascondi gli strumenti dei dati (leggi_*)")
     p.add_argument("--righe", action="store_true")
     p.add_argument("--codice", type=int, choices=range(6), metavar="STRATO", help="le righe di uno strato, pulite per le slide")
     a = p.parse_args()
-    if a.righe:
+    if a.schema:
+        mostra_schema(Path(a.schema), a.modo, a.senza_strumenti)
+    elif a.righe:
         righe()
     elif a.codice is not None:
         print(codice(a.codice))
