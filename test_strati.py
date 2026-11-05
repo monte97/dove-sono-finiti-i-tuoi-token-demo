@@ -307,7 +307,21 @@ def test_tre_esiti_giornata_piena():
              "quindi potrebbe iniziare alle 14:00.") == "avvisata"
     assert v("È oggi alle 15:00 in Sala B (piano 1), ma c'è un avviso: sessioni un'ora prima, quindi probabilmente alle 14:00.") == "avvisata"
     assert v("Oggi alle 15:00 in sala B, ma la sala B è chiusa per manutenzione: chiedi allo staff.") == "avvisata"
+    assert v("Alle 14:00, sala B; il programma indicava le 15:00.") == "giusta"
+    assert v("Alle 14:00 in sala B, era alle 15:00 nel programma.") == "giusta"
+    assert v("Alle 14:00 in sala B anziché alle 15:00.") == "giusta"
+    assert v("Alle 14:00 in sala B, il programma diceva le 15:00.") == "giusta"
     # sbagliate: 15:00 senza avvertimenti, o nessun orario
+    for frase in ("Oggi alle 15:00 in sala B, nessun avviso di chiusura o manutenzione.",
+                  "Oggi alle 15:00 in sala B, non risulta che la sala sia chiusa.",
+                  "Oggi alle 15:00 in sala B, nessuna anticipazione prevista.",
+                  "Alle 15:00, non alle 14:00.",
+                  "Oggi alle 15:00 in sala B. Il 14:00 è il pranzo."):
+        assert v(frase) == "sbagliata", frase
+    # e nell'altro verso, avvisate anche con un'altra frase che nega
+    assert v("Oggi alle 15:00 in sala B. Nessun cambio di sala. Ma la sala B chiude per manutenzione.") == "avvisata"
+    assert v("Oggi alle 15:00 in sala B, forse alle 14:00.") == "avvisata"
+    assert v("Oggi alle 15:00 in sala B, potrebbe iniziare alle 14:00.") == "avvisata"
     assert v("Si tiene oggi alle 15:00 nella sala B.") == "sbagliata"
     assert v("Oggi alle 15:00 nella Sala B, e non risultano variazioni o annullamenti.") == "sbagliata"
     assert v("Non so dirtelo, chiedi allo staff.") == "sbagliata"

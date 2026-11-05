@@ -297,16 +297,34 @@ ESITI = ("giusta", "avvisata", "sbagliata")
 # - giusta: dopo aver tolto quelle citazioni resta 14:00 e nessun 15:00. Anche con un «probabilmente» o «potrebbe»
 #   davanti: se il 15:00 e' solo l'orario in programma, la risposta ha scelto le 14:00 e un pubblico la riterrebbe giusta;
 # - avvisata: resta un 15:00 dato come orario ma la risposta avverte (sala B chiusa, manutenzione, un'ora prima,
-#   anticipo, oppure cita le 14:00). Quindi «e' alle 15:00 ... quindi probabilmente alle 14:00» e' avvisata: apre con il
+#   anticipo, oppure le 14:00 date come possibili o probabili). Quindi «e' alle 15:00 ... quindi probabilmente alle 14:00» e' avvisata: apre con il
 #   15:00 e lascia a chi legge la scelta. Verso conservativo: nel dubbio mai «giusta»;
-# - sbagliata: il resto (15:00 senza avvertimento, oppure nessun orario riconoscibile).
+# - sbagliata: il resto (15:00 senza avvertimento, o con un avvertimento negato, oppure nessun orario riconoscibile).
 # Limite noto: sono regex su frasi italiane; un giro di parole fuori da questi modi (per esempio «alle tre del
-# pomeriggio») non si riconosce e finisce in sbagliata. Nella giornata tranquilla: giusta se c'e' 15:00 e non 14:00.
+# pomeriggio») non si riconosce e finisce in sbagliata; un 15:00 superato detto in un modo fuori elenco («il programma
+# parlava delle 15:00») resta un 15:00 dato, quindi avvisata e non giusta (verso conservativo); una negazione
+# lontana dalla causa nella stessa frase la annulla anche quando non la regge. Nella giornata tranquilla: giusta se c'e' 15:00 e non 14:00.
 _QUINDICI_SUPERATO = re.compile(
     r"\bnon (?:più )?(?:alle|per le|delle|dalle)\s+15:00"
     r"|(?:\binvece\b|anzich[eé]|al posto\b|\brispetto\b|anticipat\w*|spostat\w*|\bchius\w*|\bchiude\b)[^.;!?]{0,30}?15:00"
-    r"|15:00 (?:in programma|previst\w*|pubblicat\w*|originari\w*)", re.I)
-_AVVERTE = re.compile(r"chius|manutenzione|un'ora prima|anticip|14:00", re.I)
+    r"|15:00 (?:in programma|previst\w*|pubblicat\w*|originari\w*)"
+    r"|\bprogramma (?:indicava|diceva|riportava|dava|segnava)\s+(?:le\s+|alle\s+)?15:00"
+    r"|(?:previst[oa]|era)\s+alle\s+15:00\s+nel\s+programma", re.I)
+# Cosa vale come avvertimento: una causa (chiusura, manutenzione, un'ora prima, anticipo) oppure le 14:00 presentate
+# come possibili o probabili. Una 14:00 nuda non avverte («il 14:00 e' il pranzo»). Una negazione che regge la causa nella
+# stessa frase la toglie, come in riporta_avviso: «nessun avviso di chiusura», «non risulta che sia chiusa»,
+# «nessuna anticipazione prevista», «non alle 14:00».
+_CAUSA = re.compile(r"chius|manutenzion|un.ora prima|anticip", re.I)
+_QUATTORDICI_POSSIBILE = re.compile(r"(?:potrebbe|probabilmente|forse|dovrebbe|magari)[^.;!?]{0,30}?14:00", re.I)
+
+
+def _avverte(risposta: str) -> bool:
+    for f in re.split(r"[.!?;\n]+", risposta):
+        negazioni = list(AVVISI_NEGA.finditer(f))
+        spie = [m.start() for rx in (_CAUSA, _QUATTORDICI_POSSIBILE) for m in rx.finditer(f)]
+        if any(not any(n.end() <= p for n in negazioni) for p in spie):
+            return True
+    return False
 
 
 def valuta(risposta: str, modo: str) -> str:
@@ -316,7 +334,7 @@ def valuta(risposta: str, modo: str) -> str:
     resto = _QUINDICI_SUPERATO.sub(" ", risposta)
     if "14:00" in risposta and "15:00" not in resto:
         return "giusta"
-    return "avvisata" if "15:00" in resto and _AVVERTE.search(risposta) else "sbagliata"
+    return "avvisata" if "15:00" in resto and _avverte(risposta) else "sbagliata"
 
 
 # Istruzioni come le scriverebbe un team: dicono cosa fa ciascuno, non come evitare la trappola.

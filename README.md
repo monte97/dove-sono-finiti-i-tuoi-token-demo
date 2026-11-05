@@ -81,7 +81,7 @@ Una run non basta: il comportamento di un agente è una distribuzione. Il banco 
 caso.
 
 ```bash
-.venv/bin/python strati.py --riepilogo        # una riga per cartella e modo: risposte sbagliate, tempi, token, costo
+.venv/bin/python strati.py --riepilogo        # una riga per cartella e modo: risposte giuste, avvisate e sbagliate, tempi, token, costo
 .venv/bin/python strati.py --misure 5         # rami nello stesso giro, cosa riporta avvisi, verdetti di valida, token e costo per agente, quota delle riletture
 .venv/bin/python segnali.py registrazioni/strato-5 registrazioni/strato-5-correzione   # i segnali, dai soli span
 ```
