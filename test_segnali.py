@@ -1,6 +1,7 @@
 """Controlli dei segnali per la produzione, su run finte (a mano e dal server finto di test_strati). Uso: python test_segnali.py"""
 import contextlib
 import io
+import json
 import threading
 
 import segnali as sg
@@ -136,7 +137,8 @@ def test_p95_e_valida_mai_chiamata():
 def test_riassunto_della_run():
     assert sg.riassunto(run()) == {"richiesta.forma": FORMA, "richiesta.pagine_avvisi": 40,
                                    "richiesta.costo_microusd": round(sg.segnali(run())["costo"] * 1e6),
-                                   "richiesta.quota_avvisi_pct": round(8100 / TOTALE * 100)}
+                                   "richiesta.quota_avvisi_pct": round(8100 / TOTALE * 100),
+                                   "richiesta.valida_approva": 1, "richiesta.valida_verdetti": 1}
     assert set(sg.riassunto({**run(), "strato": 1})) == {"richiesta.costo_microusd"}
     assert "richiesta.pagine_avvisi" not in sg.riassunto({**run(), "strato": 3})
 
@@ -349,6 +351,38 @@ def test_la_query_del_cruscotto_approva_come_approva():
     for testo in casi:
         assert bool(rx.fullmatch(testo)) == s.approva(testo), testo[:120]
     assert sum(s.approva(t) for t in casi[:10]) == 6  # i primi dieci: sei approvano, quattro no
+
+
+def test_tempo_deriva_la_versione_dalle_registrazioni_vecchie():
+    import tempo
+    reg = run()  # senza il campo `versione`, correzione 0
+    for correzione, nome in ((0, "nessuna"), (1, "istruzioni"), (2, "filtro"), (3, "dialogo")):
+        spans = tempo.in_otlp({**reg, "correzione": correzione}, "strato-5", adesso=2_000_000_000.0)
+        radice = next(x for x in spans if x.parent is None)
+        assert radice.attributes["richiesta.correzione"] == nome
+        assert radice.attributes["richiesta.versione_prompt"] == ts.HASH_BANCO[correzione]
+        assert all(x.resource.attributes["service.version"] == s.VERSIONE for x in spans)
+        assert all(x.resource.attributes["service.name"] == "osservare-a-strati" for x in spans)
+    # il campo scritto dalla run vince sulla derivazione; sotto lo strato 2 (niente radice) la versione va su ogni trace
+    scritto = {**reg, "versione": {"codice": s.VERSIONE, "correzione": "dialogo", "prompt": "abcd1234"}}
+    radice = next(x for x in tempo.in_otlp(scritto, "strato-5", 2_000_000_000.0) if x.parent is None)
+    assert radice.attributes["richiesta.versione_prompt"] == "abcd1234"
+    uno = {**reg, "strato": 1, "span": [x for x in reg["span"] if not x["nome"].startswith("invoke_workflow")]}
+    senza_radice = [x for x in tempo.in_otlp(uno, "strato-1", 2_000_000_000.0) if x.parent is None]
+    assert senza_radice and all(x.attributes["richiesta.correzione"] == "nessuna" for x in senza_radice)
+    logs = tempo.log_in_otlp({**reg, "log_otel": [{"trace": reg["span"][0]["trace"], "span": reg["span"][0]["id"],
+                                                    "livello": "INFO", "testo": "x"}]}, tempo.rimappa(reg, 2e9))
+    assert logs and logs[0].resource.attributes["service.version"] == s.VERSIONE
+
+
+def test_il_cruscotto_confronta_le_versioni():
+    pannelli = json.loads((s.QUI / "cruscotto" / "grafana" / "segnali.json").read_text())
+    query = [t["query"] for p in pannelli["panels"] for t in p.get("targets", [])]
+    assert all('span.banco.cartella =~ "$cartella"' in q for q in query)  # variabile multi-valore: regex, non uguaglianza
+    v = pannelli["templating"]["list"][0]
+    assert v["multi"] and v["includeAll"] and "strato-5-correzione-dialogo" in v["query"]
+    confronto = next(p for p in pannelli["panels"] if p["title"] == "Versioni a confronto")
+    assert "span.richiesta.correzione" in confronto["targets"][0]["query"]
 
 
 def test_soglie_del_controllo():

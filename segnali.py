@@ -33,7 +33,9 @@ def segnali(r: dict) -> dict:
 
 
 def riassunto(r: dict) -> dict:
-    """I fatti per richiesta da scrivere sullo span radice: TraceQL conta span, non trace."""
+    """I fatti per richiesta da scrivere sullo span radice: TraceQL conta span, non trace.
+    Attributi richiesta.* (oltre a correzione e versione_prompt, dichiarati in strati.py): forma, costo_microusd,
+    quota_avvisi_pct, pagine_avvisi, valida_approva (verdetti che approvano), valida_verdetti (tutti i verdetti)."""
     g, fuori = segnali(r), {}
     if g["forma"] is not None:
         fuori["richiesta.forma"] = g["forma"]
@@ -43,6 +45,9 @@ def riassunto(r: dict) -> dict:
         fuori["richiesta.quota_avvisi_pct"] = round(g["quota_avvisi"] * 100)
     if g["pagine"] is not None:
         fuori["richiesta.pagine_avvisi"] = g["pagine"]
+    if g["verdetti"] is not None:  # per il confronto fra versioni: a quante richieste valida ha detto di si
+        fuori["richiesta.valida_approva"] = sum(g["verdetti"])
+        fuori["richiesta.valida_verdetti"] = len(g["verdetti"])
     return fuori
 
 

@@ -12,14 +12,22 @@ from pathlib import Path
 
 from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.sdk._logs import ReadableLogRecord
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.trace import SpanContext, Status, StatusCode, TraceFlags
 
 import segnali as sg
+import strati
 
-RISORSA = Resource.create({"service.name": "osservare-a-strati"})
+# La stessa Resource delle run dal vivo (servizio e versione): su span e su log.
+RISORSA = strati.RISORSA
+
+
+def versione_della_registrazione(r: dict) -> dict:
+    """La versione di una registrazione: quella scritta nel campo `versione` se c'e'; altrimenti, per le registrazioni
+    vecchie (il banco del 5/11), derivata dalla modalita' di correzione e dalle istruzioni di adesso. Vale perche' le
+    istruzioni non sono cambiate dopo il banco: test_strati.py fissa gli hash per modalita'."""
+    return r.get("versione") or strati.versione(r.get("correzione", 0))
 
 
 def rimappa(r: dict, adesso: float) -> dict:
@@ -44,16 +52,19 @@ def in_otlp(r: dict, cartella: str, adesso: float, mappa: dict | None = None) ->
     per_id = {x["id"]: x for x in span}
     radice = next((x for x in span if x["nome"].startswith("invoke_workflow")), None)
     banco = {"banco.cartella": cartella, "banco.modo": r["modo"]}
+    versione = versione_della_registrazione(r)
+    dati_versione = {"richiesta.correzione": versione["correzione"], "richiesta.versione_prompt": versione["prompt"]}
     fuori = []
     for x in span:
         attributi = dict(x["attributi"])
         padre = per_id.get(x["padre"])
         if x is radice:
-            if not any(k.startswith("richiesta.") for k in attributi):
-                attributi.update(sg.riassunto(r))
+            # una registrazione dal vivo ha gia' i suoi valori: non si toccano (setdefault)
+            for k, v in {**sg.riassunto(r), **dati_versione}.items():
+                attributi.setdefault(k, v)
             attributi.update(banco)
-        elif radice is None and padre is None:
-            attributi.update(banco)
+        elif radice is None and padre is None:  # sotto lo strato 2 niente radice: versione e banco su ogni trace
+            attributi.update({**dati_versione, **banco})
         fuori.append(ReadableSpan(
             name=x["nome"], context=contesto(x), parent=contesto(padre) if padre else None, resource=RISORSA,
             attributes=attributi, status=Status(StatusCode.ERROR) if x["errore"] else Status(StatusCode.UNSET),
@@ -103,8 +114,6 @@ def cerca_in_tempo(tempo: str):
 if __name__ == "__main__":
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-    import strati
 
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--otlp", default="http://localhost:4418/v1/traces")

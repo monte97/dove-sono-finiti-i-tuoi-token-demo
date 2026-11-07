@@ -32,6 +32,7 @@ La pipeline fissa, la variante A (agente come strumento) e il tool runner sono n
 import argparse
 import contextvars  # s2
 import datetime as dt
+import hashlib
 import json
 import logging
 import random
@@ -50,6 +51,7 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.logging.handler import LoggingHandler  # s3
 from opentelemetry.sdk._logs import LoggerProvider  # s3
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor  # s3
+from opentelemetry.sdk.resources import Resource  # s1
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -66,6 +68,12 @@ EMAIL = re.compile(r"[\w.]+@[\w.]+\.\w+")
 MASCHERA = False
 PRODUZIONE = False  # il riassunto della richiesta sulla radice, per il cruscotto
 OTLP = None  # dove esportare gli span, oltre alla memoria
+
+# La versione del codice e del banco: il giorno del banco (tag banco-2026-11-05). Va nella Resource di span e log,
+# cosi' una run dal vivo finisce in Tempo e in Loki sotto il servizio e la versione giusti. Si cambia solo se cambia
+# qualcosa che il banco non ha misurato.
+VERSIONE = "2026-11-05"  # s1
+RISORSA = Resource.create({"service.name": "osservare-a-strati", "service.version": VERSIONE})  # s1
 
 
 class MascheraEmail(SpanProcessor):  # s5
@@ -128,7 +136,7 @@ def fai_log():
     memoria_log = InMemoryLogRecordExporter()  # uno per run (e per provider: shutdown() chiude l'exporter)
     if STRATO < 3:
         return
-    provider = LoggerProvider()  # s3
+    provider = LoggerProvider(resource=RISORSA)  # s3
     _provider_log = provider
     provider.add_log_record_processor(SimpleLogRecordProcessor(memoria_log))  # s3
     if OTLP:
@@ -150,7 +158,7 @@ def processore_otlp(url: str):
 def fai_provider(maschera: bool) -> TracerProvider:
     """Un provider per client: con la maschera, gli span passano da MascheraEmail prima dell'exporter."""
     global _vero
-    provider = TracerProvider()  # s1
+    provider = TracerProvider(resource=RISORSA)  # s1
     processore = SimpleSpanProcessor(memoria)  # s1
     if maschera:  # s5
         processore = MascheraEmail(processore)  # s5
@@ -409,8 +417,8 @@ def _sala_schema() -> dict:
     return s
 
 
-def schemi() -> dict:
-    sala = CORREZIONE == 2
+def schemi(correzione: int | None = None) -> dict:
+    sala = (CORREZIONE if correzione is None else correzione) == 2
     avvisi_tool = {"name": "leggi_avvisi", "input_schema": {"type": "object", "properties": {}},
                    "description": "Legge tutte le comunicazioni di oggi, tutte le pagine in una sola chiamata."}
     if sala:
@@ -428,17 +436,37 @@ def schemi() -> dict:
     }
 
 
-def agenti_strumento() -> dict:
+def agenti_strumento(correzione: int | None = None) -> dict:
     """strumento -> (agente invocato, sue istruzioni, suoi strumenti)"""
+    corr = CORREZIONE if correzione is None else correzione
     return {"programma": ("programma", ISTRUZIONI["programma"], ["leggi_programma", "sale"]),
             "sale": ("sale", ISTRUZIONI["sale"], ["leggi_sale"]),
-            "avvisi": ("avvisi", ISTRUZIONI["avvisi"] + (CORREZIONE_AVVISI if CORREZIONE == 2 else CORREZIONE_DIALOGO if CORREZIONE == 3 else ""),
-                       ["leggi_avvisi"] + (["programma"] if CORREZIONE == 3 else [])),
+            "avvisi": ("avvisi", ISTRUZIONI["avvisi"] + (CORREZIONE_AVVISI if corr == 2 else CORREZIONE_DIALOGO if corr == 3 else ""),
+                       ["leggi_avvisi"] + (["programma"] if corr == 3 else [])),
             "valida": ("valida", ISTRUZIONI["valida"], ["programma", "avvisi"])}
 
 
-def istruzioni_coordina() -> str:
-    return ISTRUZIONI["coordina"] + (CORREZIONE_COORDINA if CORREZIONE in (1, 2) else "")
+def istruzioni_coordina(correzione: int | None = None) -> str:
+    correzione = CORREZIONE if correzione is None else correzione
+    return ISTRUZIONI["coordina"] + (CORREZIONE_COORDINA if correzione in (1, 2) else "")
+
+
+# Che versione del comportamento sta girando: la modalita' di correzione e un hash corto del testo che il modello legge
+# davvero (le istruzioni di ogni agente e le descrizioni e gli schemi degli strumenti, con la correzione applicata).
+# Stesso testo, stesso hash: cambia solo se cambia una parola di un'istruzione o di una descrizione.
+NOMI_CORREZIONE = ("nessuna", "istruzioni", "filtro", "dialogo")
+
+
+def versione_prompt(correzione: int | None = None) -> str:
+    testo = json.dumps({"coordina": istruzioni_coordina(correzione), "agenti": agenti_strumento(correzione),
+                        "strumenti": schemi(correzione)}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(testo.encode()).hexdigest()[:8]
+
+
+def versione(correzione: int | None = None) -> dict:
+    """Quello che la registrazione e lo span radice dicono sulla versione, per una modalita' di correzione."""
+    correzione = CORREZIONE if correzione is None else correzione
+    return {"codice": VERSIONE, "correzione": NOMI_CORREZIONE[correzione], "prompt": versione_prompt(correzione)}
 
 
 PENSIERO = {"type": "adaptive", "display": "summarized"}  # il riassunto del ragionamento torna solo se lo chiedi
@@ -457,6 +485,9 @@ def _trova(tabella: dict, chiave: str):
 #   avvisi.letti              avvisi restituiti al modello
 #   avvisi.filtro             "nessuno" oppure la sala richiesta
 #   avvisi.aggiornati_alle    ora dell'ultimo aggiornamento della bacheca
+#   richiesta.correzione      sulla radice: nessuna | istruzioni | filtro | dialogo
+#   richiesta.versione_prompt sulla radice: hash corto delle istruzioni e delle descrizioni degli strumenti in uso
+# (gli altri richiesta.*, i riassunti per richiesta del cruscotto, sono dichiarati in segnali.py)
 def sala_normale(testo: str) -> str:
     """«B», « b », «sala B», «Sala B.» sono la stessa sala: toglie «sala» davanti, punteggiatura e spazi, e maiuscola."""
     t = re.sub(r"^\s*sala\b", "", str(testo), flags=re.I)
@@ -642,6 +673,8 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
         span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
         span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
+        span.set_attributes({"richiesta.correzione": NOMI_CORREZIONE[CORREZIONE],  # s2
+                             "richiesta.versione_prompt": versione_prompt()})  # s2
         if PRODUZIONE:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
             span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
         # coordina decide chi chiamare, in che ordine e cosa passare
@@ -650,7 +683,7 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     ora = dt.datetime.now()
     u = stato["fattura"]
     reg = {"strato": STRATO, "correzione": CORREZIONE, "maschera": MASCHERA, "registrata": ora.isoformat(timespec="seconds"),
-           "modo": "guasto" if guasto else "sana", "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
+           "modo": "guasto" if guasto else "sana", "versione": versione(), "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
                        "cache": sum(x.cache_read_input_tokens or 0 for x in u),  # s0
@@ -951,7 +984,7 @@ def grafo(span) -> list[str]:
 # Le misure della giornata piena. Ognuna dice da quale strato in su gli span che servono esistono: sotto, None.
 MINIMO_MISURE = {"stesso_giro": 2, "dopo_sala": 2, "token": 2, "letto": 3, "riporta": 3, "verdetti": 3, "email_valida": 3,
                  "pagine": 4, "sale_due": 2, "valida_rivede": 2, "valida_riporta": 3, "dialogo": 2, "dialogo_riporta": 3,
-                 "cicli": 2, "profondita_agenti": 2}
+                 "cicli": 2, "profondita_agenti": 2, "domanda_avvisi": 3}
 AVVISI_SALA_B = re.compile(r"sala B", re.I)
 # la causa legata alla sala (non «chiusura» da sola: «keynote di chiusura» e' rumore)
 AVVISI_CAUSA = re.compile(r"\bchius[ao]\b|\bchiud\w+|manutenzion|un.ora prima|anticipat|"
@@ -988,6 +1021,30 @@ def riporta_avviso(testo: str) -> bool:
             if any(not any(n.end() <= c.start() for n in negazioni) for c in AVVISI_CAUSA.finditer(k)):
                 return True
     return False
+
+
+# La domanda che coordina manda ad avvisi (l'argomento `richiesta` dell'arco coordina -> avvisi): nomina orario, sala,
+# variazioni, cambi, chiusura o annullamenti (qui anche manutenzione, anticipo, spostamenti), oppure nomina solo la sessione.
+# Nel banco del 5/11 le avvisate nascono dalle domande della prima classe: avvisi sa cosa cercare solo se glielo dici.
+CHIEDE_VARIAZIONI = re.compile(r"orari|\bsala\b|\bsale\b|variazion|cambi|chius|annull|manutenzion|anticip|spost", re.I)
+CLASSI_DOMANDA = ("variazioni", "sessione")
+
+
+def classe_domanda(richiesta: str) -> str:
+    """variazioni | sessione: la domanda ad avvisi chiede di variazioni (orario, sala, cambi, chiusura, annullamenti)
+    oppure nomina solo la sessione."""
+    return "variazioni" if CHIEDE_VARIAZIONI.search(richiesta) else "sessione"
+
+
+def domande_ad_avvisi(span) -> list[str]:
+    """Gli argomenti `richiesta` degli archi coordina -> avvisi, nell'ordine in cui sono partiti."""
+    fuori = []
+    for x in archi(span, ("avvisi",), da="coordina"):
+        try:
+            fuori.append(str(json.loads(attr(x, "gen_ai.tool.call.arguments", "{}")).get("richiesta", "")))
+        except (ValueError, AttributeError):
+            fuori.append("")
+    return fuori
 
 
 def archi(span, verso=None, da=None) -> list:
@@ -1143,6 +1200,8 @@ def misura(r: dict) -> dict:
             "pagine_ricontrolli": se("pagine", lambda: pagine_ricontrolli(span)),
             "tool_ha_avviso": se("letto", lambda: any(AVVISO_CHIAVE in attr(x, "gen_ai.tool.call.result", "") for x in avvisi_tool)),
             "avvisi_riporta": se("riporta", lambda: any(riporta_avviso(attr(x, "gen_ai.tool.call.result", "")) for x in a_avvisi)),
+            "classe_domanda": se("domanda_avvisi", lambda: classe_domanda(domande_ad_avvisi(span)[0]) if a_avvisi else None),
+            "avvisi_riporta_primo": se("domanda_avvisi", lambda: bool(a_avvisi) and riporta_avviso(attr(a_avvisi[0], "gen_ai.tool.call.result", ""))),
             "avvisi_con_sala": se("riporta", lambda: any(AVVISI_SALA_B.search(attr(x, "gen_ai.tool.call.arguments", "")) for x in a_avvisi)),
             "sale_da_due": se("sale_due", lambda: sale_da_due(span)),
             "valida_avvisi": se("valida_rivede", lambda: bool(ricontrolli)),
@@ -1160,6 +1219,24 @@ def misura(r: dict) -> dict:
             "quota_avvisi": se("token", lambda: quota_avvisi(span)),
             "costo_agente": se("token", lambda: costo_per_agente(span)),
             "riletture": se("token", lambda: quota_riletture(span))}
+
+
+def tabella_domande(mm: list[dict]) -> list[str]:
+    """La tabella incrociata «domanda di coordina ad avvisi × esito», sulla prima domanda di ogni run (quella dei rami
+    paralleli, quando coordina non sa ancora la sala), e per ogni classe quante volte avvisi riporta l'avviso a coordina
+    (nella prima risposta e in qualunque giro)."""
+    righe = [f"  {'domanda di coordina ad avvisi × esito':<50} {'n':>3} {'giusta':>7} {'avvisata':>9} {'sbagliata':>10}"
+             f" {'avvisi riporta (1° giro)':>25} {'(qualunque giro)':>17}"]
+    for classe in CLASSI_DOMANDA + (None,):
+        gruppo = [m for m in mm if m["classe_domanda"] == classe]
+        if not gruppo:
+            continue
+        nome = {"variazioni": "nomina orario, sala, variazioni...", "sessione": "nomina solo la sessione",
+                None: "avvisi non chiamato"}[classe]
+        righe.append(f"    {nome:<48} {len(gruppo):>3} " + " ".join(
+            f"{sum(m['esito'] == e for m in gruppo):>{w}}" for e, w in zip(ESITI, (7, 9, 10)))
+            + f" {sum(m['avvisi_riporta_primo'] for m in gruppo):>25} {sum(bool(m['avvisi_riporta']) for m in gruppo):>17}")
+    return righe
 
 
 def misure(cartelle: list[Path]):
@@ -1186,6 +1263,8 @@ def misure(cartelle: list[Path]):
             print(conta("avvisi_con_sala", 3, "la richiesta ad avvisi nomina la sala B"))
             print(conta("tool_ha_avviso", 3, "leggi_avvisi ha restituito l'avviso sulla sala B"))
             print(conta("avvisi_riporta", 3, "avvisi lo riporta a coordina"))
+            if strato >= MINIMO_MISURE["domanda_avvisi"] and modo == "guasto":
+                print("\n".join(tabella_domande(mm)))
             print(conta("sale_da_due", 2, "sale chiamato da due chiamanti diversi"))
             print(conta("valida_avvisi", 2, "valida richiede ad avvisi"))
             print(conta("valida_avvisi_riporta", 3, "...e la risposta di avvisi riporta l'avviso"))

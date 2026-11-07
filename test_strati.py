@@ -645,7 +645,9 @@ def test_riassunto_sulla_radice():
     radice = next(x for x in reg["span"] if x["padre"] is None)
     atteso = sg.riassunto({**reg, "span": [x for x in reg["span"] if x is not radice]})
     assert atteso["richiesta.forma"] and atteso["richiesta.costo_microusd"] > 0
-    assert {k: v for k, v in radice["attributi"].items() if k.startswith("richiesta.")} == atteso
+    visti = {k: v for k, v in radice["attributi"].items() if k.startswith("richiesta.")}
+    assert visti.pop("richiesta.correzione") == "nessuna" and visti.pop("richiesta.versione_prompt") == s.versione_prompt(0)
+    assert visti == atteso
 
 
 def test_riassunto_due_trace_insieme():
@@ -1010,6 +1012,113 @@ def test_schema_sotto_lo_strato_2_e_sotto_il_3():
     assert "2 run" not in testo and "strato 2" in testo and "```mermaid" in testo
     assert "riporta l'avviso sulla sala B: serve lo strato 3" in testo
     assert "serve lo strato 2" not in testo
+
+# Gli hash del testo che il modello legge, per modalita' di correzione, fissati sul banco del 5/11 (tag banco-2026-11-05):
+# le istruzioni non sono cambiate dopo il banco, e tempo.py ricava da qui la versione delle registrazioni che non l'hanno.
+# Se questo test fallisce hai cambiato un'istruzione o una descrizione: le registrazioni del banco non sono piu' di questa
+# versione, e va aggiornata la tabella in docs/banco-rami-paralleli.md.
+HASH_BANCO = {0: "8909d44b", 1: "1d2a1b7e", 2: "ead55ac1", 3: "d8d06c33"}
+
+
+def test_versione_prompt_stabile_e_per_modalita():
+    assert {m: s.versione_prompt(m) for m in range(4)} == HASH_BANCO
+    assert len(set(HASH_BANCO.values())) == 4  # quattro modalita', quattro testi diversi
+    assert s.versione_prompt(1) == s.versione_prompt(1)
+    s.CORREZIONE = 2
+    try:
+        assert s.versione_prompt() == HASH_BANCO[2]  # senza argomento, la modalita' in corso
+    finally:
+        s.CORREZIONE = 0
+
+
+def test_versione_prompt_cambia_se_cambia_un_testo():
+    base = s.versione_prompt(0)
+    for chiave, dove in (("coordina", s.ISTRUZIONI), ("avvisi", s.ISTRUZIONI), ("avvisi", s.DESCRIZIONI)):
+        prima = dove[chiave]
+        dove[chiave] = prima + " "
+        try:
+            assert s.versione_prompt(0) != base, (chiave, dove is s.ISTRUZIONI)
+        finally:
+            dove[chiave] = prima
+    prima = s.CORREZIONE_COORDINA  # una frase di correzione cambia solo le modalita' che la usano
+    s.CORREZIONE_COORDINA = prima + "!"
+    try:
+        assert s.versione_prompt(0) == base and s.versione_prompt(1) != HASH_BANCO[1] and s.versione_prompt(3) == HASH_BANCO[3]
+    finally:
+        s.CORREZIONE_COORDINA = prima
+    assert s.versione_prompt(0) == base
+
+
+def test_versione_nella_trace_nella_resource_e_nella_registrazione():
+    reg, _ = corri(5)
+    radice = next(x for x in reg["span"] if x["padre"] is None)
+    assert radice["attributi"]["richiesta.correzione"] == "nessuna"
+    assert radice["attributi"]["richiesta.versione_prompt"] == HASH_BANCO[0]
+    assert reg["versione"] == {"codice": s.VERSIONE, "correzione": "nessuna", "prompt": HASH_BANCO[0]}
+    for x in s.memoria.get_finished_spans():
+        assert x.resource.attributes["service.name"] == "osservare-a-strati"
+        assert x.resource.attributes["service.version"] == s.VERSIONE
+    assert s._provider_log.resource.attributes["service.version"] == s.VERSIONE  # anche i log
+    s.CORREZIONE = 2
+    try:
+        reg, _ = corri(5)
+    finally:
+        s.CORREZIONE = 0
+    assert reg["versione"]["correzione"] == "filtro" and reg["versione"]["prompt"] == HASH_BANCO[2]
+
+
+def test_maschera_niente_email_negli_span_ne_nei_log():
+    try:
+        s.MASCHERA = True
+        reg, _ = corri(5)
+    finally:
+        s.MASCHERA = False
+    assert reg["log_otel"]  # i log ci sono...
+    assert not any(s.EMAIL.search(str(l["testo"])) for l in reg["log_otel"])  # ...e senza email
+    assert not any(s.EMAIL.search(json.dumps(x["attributi"], ensure_ascii=False)) for x in reg["span"])
+    assert not any(s.EMAIL.search(json.dumps(x.attributes.get("gen_ai.input.messages", ""), ensure_ascii=False))
+                   for x in s.memoria.get_finished_spans())
+    assert reg["versione"]["codice"] == s.VERSIONE and reg["maschera"] is True
+
+
+def test_classe_della_domanda_ad_avvisi():
+    for testo in ('Workshop "Kubernetes da zero" orario, sala o variazioni', "workshop Kubernetes da zero: variazioni di orario o sala",
+                  "sala B chiusura manutenzione pomeriggio oggi", "Kubernetes da zero: cambi o annullamenti"):
+        assert s.classe_domanda(testo) == "variazioni", testo
+    for testo in ("Workshop Kubernetes da zero", 'Workshop "Kubernetes da zero"', "workshop Kubernetes da zero", ""):
+        assert s.classe_domanda(testo) == "sessione", testo
+
+
+def test_tabella_domande_sul_server_finto():
+    reg, _ = corri(5)
+    assert s.domande_ad_avvisi(reg["span"]) == ["Ci sono avvisi sul workshop Kubernetes da zero?"]
+    m = s.misura(reg)
+    assert m["classe_domanda"] == "sessione" and m["avvisi_riporta_primo"] is False
+    assert s.misura({**reg, "strato": 2})["classe_domanda"] is None  # sotto lo strato 3 non si misura
+    cartella = Path(tempfile.mkdtemp()) / "strato-5"
+    cartella.mkdir(parents=True)
+    (cartella / "a.json").write_text(json.dumps(reg))
+    with contextlib.redirect_stdout(io.StringIO()) as fuori:
+        s.misure([cartella])
+    testo = fuori.getvalue()
+    assert "domanda di coordina ad avvisi × esito" in testo and "nomina solo la sessione" in testo
+    assert "nomina orario, sala, variazioni" not in testo  # classe vuota: non si stampa
+
+
+def test_classe_domanda_sulle_richieste_vere_del_banco():
+    """Le domande di coordina ad avvisi del banco del 5/11 (strato-5, guasto): 8 nominano variazioni, 22 solo la sessione."""
+    cartella = s.QUI / "registrazioni" / "strato-5"
+    if not cartella.is_dir():
+        return  # repo senza banco
+    classi = {}
+    for f in sorted(cartella.glob("*.json")):
+        r = json.loads(f.read_text())
+        if r["modo"] == "guasto":
+            for q in s.domande_ad_avvisi(r["span"])[:1]:
+                classi.setdefault(s.classe_domanda(q), []).append((q, s.valuta(r["risposta"], "guasto")))
+    assert {k: len(v) for k, v in classi.items()} == {"variazioni": 8, "sessione": 22}
+    assert all("variazioni" in q or "orario" in q for q, _ in classi["variazioni"])
+    assert sum(e == "avvisata" for _, e in classi["variazioni"]) == 7
 
 
 if __name__ == "__main__":

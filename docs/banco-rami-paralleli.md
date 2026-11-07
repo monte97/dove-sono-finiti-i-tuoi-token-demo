@@ -48,9 +48,33 @@ Le cartelle risultanti sono `registrazioni/strato-N`, `strato-N-correzione`, `st
 | Run in cui `valida` ricontrolla con `programma` | 19 su 30 nella guasta, 25 su 30 nella sana | `.venv/bin/python strati.py --misure 5` (riga `valida richiede a programma`) |
 | Profondità massima dell'albero e numero di span | profondità 9 (mediana 9); span massimo 53 (mediana 45) nella guasta | `.venv/bin/python strati.py --misure 5` (righe `massimi: profondità ... span ...` e `mediane: profondità ... · span ...`) |
 | Volte in cui la guardia contro i cicli ha rifiutato una chiamata | 0 su 30 run, 0 volte (guardia mai scattata) | `.venv/bin/python strati.py --misure 5` (riga `guardia dei cicli scattata`) |
+| La domanda di `coordina` ad `avvisi` (guasta, prima domanda di ogni run) | 8 run nominano orario, sala, variazioni o annullamenti: 7 avvisate, 1 sbagliata, `avvisi` riporta l'avviso al primo giro in 6; 22 run nominano solo la sessione: 21 sbagliate, 1 avvisata (la domanda sulla sala B è partita al secondo giro) | `.venv/bin/python strati.py --misure 5` (tabella `domanda di coordina ad avvisi × esito`; la classe è `classe_domanda()` in `strati.py`) |
 
 `--misure 5` stampa insieme `strato-5`, `strato-5-correzione`, `strato-5-correzione-completa` e
 `strato-5-correzione-dialogo`, ognuna con le giornate `guasto` e `sana` che contiene.
+
+## La versione nella trace
+
+Ogni run porta la versione di ciò che guida il comportamento: `service.name = osservare-a-strati` e
+`service.version = VERSIONE` (`"2026-11-05"`, codice e banco) nella Resource di span e log; sulla radice
+`invoke_workflow` `richiesta.correzione` (`nessuna`, `istruzioni`, `filtro`, `dialogo`) e `richiesta.versione_prompt`,
+un hash di 8 caratteri del testo che il modello legge (istruzioni di ogni agente, descrizioni e schemi degli strumenti,
+con la correzione applicata: `versione_prompt()` in `strati.py`). Le registrazioni nuove li scrivono nel campo
+`versione`; `tempo.py`, per quelle del banco che non lo hanno, li ricava dalla correzione registrata e dalle istruzioni
+di adesso. È lecito perché le istruzioni non sono cambiate dopo il banco: gli hash qui sotto sono fissati in
+`test_strati.py` (`HASH_BANCO`), e le istruzioni registrate negli span del banco (`gen_ai.system_instructions`)
+coincidono con quelle del codice in tutti i 2.823 span di chat delle run guaste controllati.
+
+| Correzione | Cartella | Hash del prompt |
+|---|---|---|
+| `nessuna` | `strato-5` | `8909d44b` |
+| `istruzioni` | `strato-5-correzione` | `1d2a1b7e` |
+| `filtro` | `strato-5-correzione-completa` | `ead55ac1` |
+| `dialogo` | `strato-5-correzione-dialogo` | `d8d06c33` |
+
+Il pannello «Versioni a confronto» del cruscotto ne mostra una riga per modalità (richieste, costo e quota di avvisi
+mediani, `valida` approva su verdetti); con la variabile `cartella` su più cartelle `strato-5*` (o All) le righe si
+affiancano. `verifica_cruscotto.py` lo confronta con `segnali.py`, da solo e con le cartelle insieme.
 
 ## Agenti che si chiamano
 
