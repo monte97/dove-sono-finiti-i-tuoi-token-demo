@@ -210,8 +210,8 @@ Il confronto finisce con le soglie dello strato 5 senza correzione, cioè quando
 | giornata tranquilla, giuste | tutte | tutte |
 
 Il banco del 5/11 sta dentro: 0 giuste e 22 sbagliate su 30 nella giornata piena, 30 giuste su 30 nella
-tranquilla. Le 8 risposte che non sono sbagliate avvertono l'utente: in 7 l'avviso arriva a `coordina` al primo
-giro, perché `coordina` chiede ad `avvisi` delle variazioni di orario o di sala; quando chiede solo del workshop,
+tranquilla. Le 8 risposte che non sono sbagliate avvertono l'utente: in 7 è `avvisi` a riportare l'avviso a
+`coordina` (in 6 alla prima domanda, in 1 alla seconda), quando `coordina` chiede delle variazioni di orario o di sala; quando chiede solo del workshop,
 `avvisi` risponde «Nessun avviso.». Il ricontrollo di `valida` conferma l'errore in 12 run e lo scopre da solo in
 una. Le run da rivedere sono in `docs/run-da-mostrare.md`. Se il controllo esce dalle soglie, il modello dietro
 l'alias è cambiato: si rifà il banco e si aggiornano i numeri.

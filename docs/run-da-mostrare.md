@@ -17,8 +17,8 @@ Scelte dal banco del 5/11 (tag `banco-2026-11-05`), tutte allo strato 5. Ognuna 
 | risposta all'utente | 15:00, sala B, «non ci sono avvisi»: **sbagliata e verificata due volte** | 15:00 con l'avviso della chiusura: **avvisata** |
 | span · secondi · costo | 41 · 19,6 s · 0,0059 $ | 45 · 27,6 s · 0,0071 $ |
 
-Sul banco questa differenza conta. In 7 delle 8 risposte avvisate, `avvisi` riporta l'avviso a `coordina` al primo
-giro, perché la domanda nomina le variazioni di orario o di sala. Quando la domanda nomina solo il workshop,
+Sul banco questa differenza conta. In 7 delle 8 risposte avvisate, `avvisi` riporta l'avviso a `coordina`: in 6 alla
+prima domanda, in 1 alla seconda, quando la domanda nomina le variazioni di orario o di sala. Quando la domanda nomina solo il workshop,
 `avvisi` risponde «Nessun avviso.», come il suo contratto chiede.
 
 Gli screenshot di Grafana sono della run `202614` (cartella del talk, `talk/screenshot/2026-11-05-rami-paralleli/`).
