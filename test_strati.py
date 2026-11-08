@@ -145,6 +145,48 @@ def test_strato_0_solo_log_e_fattura():
     assert not any("traceparent" in h for h in VISTE[-CHIAMATE:])
 
 
+def test_strato_0_una_riga_di_log_per_chiamata():
+    reg, fuori = corri(0)
+    assert len(reg["righe"]) == CHIAMATE and reg["metriche"] == [] and reg["log_otel"] == []
+    assert {r["campi"]["richiesta"] for r in reg["righe"]} == {reg["richiesta"]}  # lo stesso id su ogni riga
+    agenti = [r["campi"]["agente"] for r in reg["righe"]]
+    assert {a: agenti.count(a) for a in set(agenti)} == {"coordina": 3, "programma": 2, "sale": 2, "avvisi": 2, "valida": 1}
+    r = reg["righe"][0]["campi"]  # i nomi dei campi del conto, come li manda il provider
+    assert (r["input_tokens"], r["output_tokens"], r["cache_read_input_tokens"], r["cache_creation_input_tokens"]) == (1000, 50, 0, 0)
+    assert r["modello"] == s.MODEL and reg["righe"][0]["testo"] == "chiamata al modello"
+    assert "chiamata al modello" in fuori and f"richiesta={reg['richiesta']}" in fuori and "input_tokens=1000" in fuori
+    assert 'LOG.info("chiamata al modello"' in s.codice(0) and "uuid.uuid4()" in s.codice(0)
+    assert s.LOG.handlers == []  # l'impalcatura che tiene le righe esce con la run
+    assert corri(0)[0]["richiesta"] != reg["richiesta"]  # un id per richiesta
+
+
+def test_strato_1_le_metriche_dei_token():
+    reg, fuori = corri(1)
+    m = {(x["nome"], x["attributi"].get("gen_ai.agent.name")): x for x in reg["metriche"]}
+    for agente, n in {"coordina": 3, "programma": 2, "sale": 2, "avvisi": 2, "valida": 1}.items():
+        assert m[("gen_ai.client.inference.usage.input_tokens", agente)]["valore"] == 1000 * n
+        assert m[("gen_ai.client.inference.usage.output_tokens", agente)]["valore"] == 50 * n
+        h = m[("assistente.agente.token", agente)]
+        assert h["conteggio"] == 1 and h["somma"] == 1050 * n  # un valore per agente, a fine richiesta
+    a = m[("gen_ai.client.inference.usage.input_tokens", "avvisi")]["attributi"]
+    assert (a["gen_ai.operation.name"], a["gen_ai.provider.name"], a["gen_ai.token.modality"]) == ("chat", "anthropic", "text")
+    assert a["gen_ai.request.model"] == s.MODEL and len(reg["metriche"]) == 15
+    assert all(not x["exemplar"] for x in reg["metriche"])  # allo strato 1 non c'e' la trace della richiesta
+    assert "assistente.agente.token · coordina 3150 · " in fuori and "input_tokens 10000 · output_tokens 500" in fuori
+    assert len(corri(1)[0]["metriche"]) == 15  # a ogni run solo la sua: la memoria legge in delta
+    codice1 = s.codice(1)
+    assert 'create_histogram("assistente.agente.token"' in codice1 and "TOKEN_AGENTE.record(n" in codice1
+    assert "TOKEN_IN.add(ingresso, attributi)" in codice1 and "if STRATO" not in codice1
+
+
+def test_strato_2_gli_exemplar_portano_la_trace_della_richiesta():
+    reg, _ = corri(2)
+    traccia = reg["span"][0]["trace"]
+    istogramma = [x for x in reg["metriche"] if x["nome"] == "assistente.agente.token"]
+    assert len(istogramma) == 5 and all(x["exemplar"] == [traccia] for x in istogramma)
+    assert all(x["exemplar"] == [traccia] for x in reg["metriche"])  # anche i contatori: dentro invoke_agent
+
+
 def test_strato_1_una_trace_per_chiamata_e_niente_contenuto():
     reg, fuori = corri(1)
     assert nomi(reg) == ["anthropic.messages.create"] * CHIAMATE
@@ -189,8 +231,14 @@ def test_strato_3_log_correlati_agli_span_degli_strumenti():
     reg, fuori = corri(3)
     traccia = reg["span"][0]["trace"]
     id_span = {n: span_di(reg, f"execute_tool {n}")["id"] for n in ("leggi_programma", "leggi_sale", "leggi_avvisi")}
-    assert len(reg["log_otel"]) == 3 and all(r["trace"] == traccia and r["livello"] == "INFO" for r in reg["log_otel"])
-    per_testo = {r["testo"].split(":")[0]: r for r in reg["log_otel"]}  # scritti da thread diversi, ordine libero
+    dei_dati = [r for r in reg["log_otel"] if "campi" not in r]  # le righe degli strumenti
+    per_chiamata = [r for r in reg["log_otel"] if "campi" in r]  # le righe per chiamata dello strato 0, adesso con il contesto
+    assert len(dei_dati) == 3 and len(per_chiamata) == CHIAMATE
+    assert all(r["trace"] == traccia and r["livello"] == "INFO" for r in reg["log_otel"])
+    agente_dello_span = {x["id"]: x["attributi"]["gen_ai.agent.name"] for x in reg["span"] if x["nome"].startswith("invoke_agent")}
+    assert all(agente_dello_span[r["span"]] == r["campi"]["agente"] for r in per_chiamata)  # dentro l'invoke_agent di chi chiama
+    assert "chiamata al modello agente=avvisi input_tokens=1000" in fuori and "[invoke_agent avvisi]" in fuori
+    per_testo = {r["testo"].split(":")[0]: r for r in dei_dati}  # scritti da thread diversi, ordine libero
     for nome, r in per_testo.items():
         assert r["span"] == id_span[nome] and len(r["span"]) == 16 and len(r["trace"]) == 32
     assert "leggi_avvisi: 40 pagine, 400 avvisi, filtro nessuno" in per_testo["leggi_avvisi"]["testo"]
@@ -201,7 +249,16 @@ def test_strato_3_log_correlati_agli_span_degli_strumenti():
     assert "log con contesto" in fuori and "[execute_tool leggi_avvisi]" in fuori
     assert len(s.LOG.handlers) == 1  # un solo handler, non uno per run
     corri(3)
-    assert len(s.LOG.handlers) == 1 and len(corri(3)[0]["log_otel"]) == 3  # non si accumulano fra le run
+    assert len(s.LOG.handlers) == 1 and len(corri(3)[0]["log_otel"]) == 3 + CHIAMATE  # non si accumulano fra le run
+
+
+def test_chiamate_dagli_span_come_le_righe_dal_vivo():
+    reg, _ = corri(3)
+    dagli_span = s.chiamate_dagli_span(reg["span"])
+    chiave = lambda campi: (campi["agente"], campi["input_tokens"], campi["output_tokens"], campi["cache_read_input_tokens"])
+    assert sorted(chiave(c["campi"]) for c in dagli_span) == sorted(chiave(r["campi"]) for r in reg["righe"])
+    assert sorted(c["span"] for c in dagli_span) == sorted(r["span"] for r in reg["log_otel"] if "campi" in r)
+    assert s.chiamate_dagli_span(corri(1)[0]["span"]) == []  # allo strato 1 l'agente non si sa
 
 
 def test_sotto_lo_strato_3_i_log_non_hanno_contesto():

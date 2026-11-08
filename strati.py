@@ -10,8 +10,9 @@ ieri sera dice 15:00 sala B, e solo un avviso di stamattina sulla sala B dice ch
 meta'. Senza `--guasto` (modo "sana") e' la giornata tranquilla: 3 pagine, niente sulla sala B.
 
 Strati (ognuno contiene i precedenti):
-  0  oggi: una riga di log e la fattura, niente OpenTelemetry
-  1  l'SDK: la strumentazione nativa di anthropic, nient'altro
+  0  oggi: una riga di log per ogni chiamata al modello (agente e token) e la fattura, niente OpenTelemetry
+  1  le metriche dei token e l'SDK: contatori per chiamata, un istogramma per agente in ogni richiesta, e la
+     strumentazione nativa di anthropic
   2  gli agenti: span invoke_workflow, invoke_agent e gli archi fra agenti, scritti a mano
   3  lo strumento: span execute_tool con argomenti e risultato
   4  i dati letti: da dove viene il dato e quanto
@@ -42,6 +43,7 @@ import sys
 import textwrap
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -51,6 +53,8 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.logging.handler import LoggingHandler  # s3
 from opentelemetry.sdk._logs import LoggerProvider  # s3
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor  # s3
+from opentelemetry.sdk.metrics import Counter, Histogram, MeterProvider
+from opentelemetry.sdk.metrics.export import AggregationTemporality, InMemoryMetricReader
 from opentelemetry.sdk.resources import Resource  # s1
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -60,7 +64,7 @@ from opentelemetry.trace import StatusCode
 QUI = Path(__file__).parent
 load_dotenv(QUI / ".env")
 
-TITOLI = {0: "oggi: un log e una fattura", 1: "l'SDK", 2: "gli agenti", 3: "lo strumento",
+TITOLI = {0: "oggi: un log e una fattura", 1: "le metriche e l'SDK", 2: "gli agenti", 3: "lo strumento",
           4: "i dati letti", 5: "il contenuto"}
 STRATO = 0
 
@@ -143,6 +147,88 @@ def fai_log():
         provider.add_log_record_processor(processore_otlp_log(url_log(OTLP)))
     _handler = LoggingHandler(logger_provider=provider)  # s3
     LOG.addHandler(_handler)  # s3
+
+
+# Le righe di log per chiamata (strato 0) portano l'id della richiesta e il conto della risposta. Le prende anche
+# l'impalcatura qui sotto, a ogni strato, per la stampa e per la registrazione: dallo strato 3 escono pure via OpenTelemetry.
+CAMPI_RIGA = ("richiesta", "agente", "modello", "input_tokens", "output_tokens", "cache_read_input_tokens",
+              "cache_creation_input_tokens")
+
+
+class Righe(logging.Handler):
+    """Impalcatura della demo, non strumentazione: tiene le righe di log della run che portano l'id della richiesta."""
+
+    def __init__(self):
+        super().__init__(logging.INFO)
+        self.righe = []
+
+    def emit(self, record):
+        if hasattr(record, "richiesta"):
+            self.righe.append({"tempo": record.created, "livello": record.levelname, "testo": record.getMessage(),
+                               "campi": {k: getattr(record, k) for k in CAMPI_RIGA if hasattr(record, k)}})
+
+
+def logfmt(campi: dict) -> str:
+    return " ".join(f"{k}={v}" for k, v in campi.items())
+
+
+# Le metriche (strato 1): un provider per processo. La memoria legge in delta, quindi a ogni run solo il nuovo.
+memoria_metriche = InMemoryMetricReader(preferred_temporality={Counter: AggregationTemporality.DELTA,
+                                                               Histogram: AggregationTemporality.DELTA})
+_provider_metriche = None
+TOKEN_IN = TOKEN_OUT = TOKEN_AGENTE = None
+# I confini dell'istogramma: avvisi in una richiesta spende 17 mila token per volta che lavora (banco del 5/11),
+# quindi una, due o tre volte cadono in tre secchi diversi.
+CONFINI_TOKEN = [2_000, 5_000, 10_000, 20_000, 30_000, 40_000, 50_000, 60_000, 80_000, 100_000]
+
+
+def url_metriche(url: str) -> str:
+    """Dove vanno le metriche via OTLP: lo stesso host degli span, path /v1/metrics."""
+    return (url[:-len("/v1/traces")] if url.endswith("/v1/traces") else url.rstrip("/")) + "/v1/metrics"
+
+
+def fai_metriche():
+    """Il provider delle metriche e i tre strumenti dei token: due contatori per chiamata con i nomi delle convenzioni
+    GenAI, e un istogramma con un nome mio, un valore per agente a fine richiesta. Con --otlp escono ogni 5 secondi."""
+    global _provider_metriche, TOKEN_IN, TOKEN_OUT, TOKEN_AGENTE
+    if _provider_metriche:
+        return
+    lettori = [memoria_metriche]
+    if OTLP:
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        lettori.append(PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=url_metriche(OTLP)),
+                                                     export_interval_millis=5000))
+    provider = MeterProvider(resource=RISORSA, metric_readers=lettori)  # s1
+    misura = provider.get_meter("osservare-a-strati")  # s1
+    TOKEN_IN = misura.create_counter("gen_ai.client.inference.usage.input_tokens", unit="{token}")  # s1
+    TOKEN_OUT = misura.create_counter("gen_ai.client.inference.usage.output_tokens", unit="{token}")  # s1
+    TOKEN_AGENTE = misura.create_histogram("assistente.agente.token", unit="{token}",  # s1
+                                           description="token di un agente in una richiesta",  # s1
+                                           explicit_bucket_boundaries_advisory=CONFINI_TOKEN)  # s1
+    _provider_metriche = provider
+
+
+def metriche_in_dict(dati) -> list[dict]:
+    """Le misure lette dalla memoria: una voce per serie, con le trace degli exemplar (dallo strato 2, la richiesta)."""
+    fuori = []
+    for rm in (dati.resource_metrics if dati else []):
+        for sm in rm.scope_metrics:
+            for m in sm.metrics:
+                for p in m.data.data_points:
+                    voce = {"nome": m.name, "attributi": dict(p.attributes or {})}
+                    if hasattr(p, "bucket_counts"):  # istogramma
+                        voce.update({"conteggio": p.count, "somma": p.sum})
+                    else:
+                        voce["valore"] = p.value
+                    voce["exemplar"] = sorted({format(e.trace_id, "032x") for e in (p.exemplars or []) if e.trace_id})
+                    fuori.append(voce)
+    return fuori
+
+
+def leggi_metriche() -> list[dict]:
+    """Quello che le metriche hanno misurato dall'ultima lettura: vuoto finché nessuno strato 1 ha creato il provider."""
+    return metriche_in_dict(memoria_metriche.get_metrics_data()) if _provider_metriche else []
 
 
 memoria = InMemorySpanExporter()  # s1  ponytail: in memoria; dal vivo un exporter OTLP verso un backend
@@ -607,8 +693,22 @@ def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strum
     for _ in range(MAX_GIRI):
         r = client.messages.create(model=MODEL, max_tokens=4096, system=istruzioni, messages=messaggi,
                                    thinking=PENSIERO, **extra)
+        u = r.usage  # s0  il conto di questa chiamata: arriva con la risposta
+        LOG.info("chiamata al modello", extra={"richiesta": stato["richiesta"], "agente": nome, "modello": r.model,  # s0
+                                               "input_tokens": u.input_tokens, "output_tokens": u.output_tokens,  # s0
+                                               "cache_read_input_tokens": u.cache_read_input_tokens or 0,  # s0
+                                               "cache_creation_input_tokens": u.cache_creation_input_tokens or 0})  # s0
         with stato["lock"]:  # i rami paralleli scrivono qui insieme
             stato["fattura"].append(r.usage)  # s0  quello che il provider conta e fattura
+        if STRATO >= 1:  # s1  le stesse cifre, come metriche
+            attributi = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "anthropic",  # s1
+                         "gen_ai.token.modality": "text", "gen_ai.request.model": MODEL,  # s1
+                         "gen_ai.response.model": r.model, "gen_ai.agent.name": nome}  # s1
+            ingresso = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)  # s1
+            TOKEN_IN.add(ingresso, attributi)  # s1
+            TOKEN_OUT.add(u.output_tokens, attributi)  # s1
+            with stato["lock"]:  # s1
+                stato["per_agente"][nome] = stato["per_agente"].get(nome, 0) + ingresso + u.output_tokens  # s1
         chiamate = [b for b in r.content if b.type == "tool_use"]
         if not chiamate:
             return "".join(b.text for b in r.content if b.type == "text")
@@ -634,6 +734,7 @@ def cliente(**prova):
     if STRATO == 0:
         fai_log()
         return anthropic.Anthropic(open_telemetry=False, **prova)
+    fai_metriche()
     provider = fai_provider(MASCHERA)
     fai_log()
     modo = "metadata_only"  # s1
@@ -659,26 +760,39 @@ def in_dict(s) -> dict:
 
 
 def log_in_dict(r) -> dict:
-    """Un record di log con il contesto che l'handler gli ha messo: trace e span dello span corrente."""
+    """Un record di log con il contesto che l'handler gli ha messo: trace e span dello span corrente, e i campi della
+    riga per chiamata se ci sono."""
     lr = r.log_record
+    campi = {k: v for k, v in (lr.attributes or {}).items() if k in CAMPI_RIGA}
     return {"trace": format(lr.trace_id, "032x"), "span": format(lr.span_id, "016x"),
-            "livello": lr.severity_text, "testo": lr.body, "tempo": lr.timestamp / 1e9}  # epoch in secondi, come inizio e fine degli span
+            "livello": lr.severity_text, "testo": lr.body, "tempo": lr.timestamp / 1e9,  # epoch in secondi, come inizio e fine degli span
+            **({"campi": campi} if campi else {})}
 
 
 def esegui(guasto: bool, cartella: Path, client=None) -> dict:
     memoria.clear()
     client = client or cliente()
-    stato = {"piena": guasto, "fattura": [], "lock": threading.Lock()}
+    stato = {"piena": guasto, "fattura": [], "per_agente": {}, "lock": threading.Lock()}
+    stato["richiesta"] = uuid.uuid4().hex[:8]  # s0  lo stesso id su ogni riga di log della richiesta, per ritrovarle insieme
+    righe = Righe()  # le righe di log di questa run, per la stampa e la registrazione
+    LOG.addHandler(righe)
+    leggi_metriche()  # la memoria delle metriche riparte da qui: conta solo questa run
     inizio = time.monotonic()  # s0
-    with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
-        span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
-        span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
-        span.set_attributes({"richiesta.correzione": NOMI_CORREZIONE[CORREZIONE],  # s2
-                             "richiesta.versione_prompt": versione_prompt()})  # s2
-        if PRODUZIONE:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
-            span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
-        # coordina decide chi chiamare, in che ordine e cosa passare
-        risposta = agente(client, "coordina", istruzioni_coordina(), DOMANDA, stato, ["programma", "sale", "avvisi", "valida"])
+    try:
+        with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
+            span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
+            span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
+            span.set_attributes({"richiesta.correzione": NOMI_CORREZIONE[CORREZIONE],  # s2
+                                 "richiesta.versione_prompt": versione_prompt()})  # s2
+            if PRODUZIONE:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
+                span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
+            # coordina decide chi chiamare, in che ordine e cosa passare
+            risposta = agente(client, "coordina", istruzioni_coordina(), DOMANDA, stato, ["programma", "sale", "avvisi", "valida"])
+            if STRATO >= 1:  # s1  a fine richiesta, un valore per agente; dallo strato 2 porta la trace come exemplar
+                for nome, n in stato["per_agente"].items():  # s1
+                    TOKEN_AGENTE.record(n, {"gen_ai.agent.name": nome})  # s1
+    finally:
+        LOG.removeHandler(righe)
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
@@ -689,7 +803,8 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
                        "cache": sum(x.cache_read_input_tokens or 0 for x in u),  # s0
                        "out": sum(x.output_tokens for x in u)},  # s0
            "secondi": secondi, "span": [in_dict(s) for s in memoria.get_finished_spans()],
-           "log_otel": [log_in_dict(r) for r in memoria_log.get_finished_logs()]}
+           "log_otel": [log_in_dict(r) for r in memoria_log.get_finished_logs()],
+           "richiesta": stato["richiesta"], "righe": righe.righe, "metriche": leggi_metriche()}
     cartella.mkdir(parents=True, exist_ok=True)
     (cartella / f"{ora:%Y%m%d-%H%M%S}-{reg['modo']}.json").write_text(json.dumps(reg, ensure_ascii=False, indent=1))
     return reg
@@ -817,6 +932,17 @@ def contenuto(span):
                     print(c("giallo", f"pensiero di {agente_di(s, per_id)}: ") + " ".join(parte.get("content", "").split()))
 
 
+def mostra_metriche(metriche: list):
+    """Dallo strato 1: cosa hanno misurato le metriche in questa richiesta."""
+    per_agente = {m["attributi"].get("gen_ai.agent.name", "?"): m["somma"] for m in metriche
+                  if m["nome"] == "assistente.agente.token"}
+    somma = lambda nome: round(sum(m["valore"] for m in metriche if m["nome"] == nome))
+    print(c("grigio", "metriche: ") + "assistente.agente.token · " + " · ".join(
+        f"{a} {round(n)}" for a, n in sorted(per_agente.items(), key=lambda kv: -kv[1])))
+    print(c("grigio", "          ") + f"gen_ai.client.inference.usage · input_tokens "
+          f"{somma('gen_ai.client.inference.usage.input_tokens')} · output_tokens {somma('gen_ai.client.inference.usage.output_tokens')}")
+
+
 def con_email(span) -> int:
     return sum(1 for s in span for v in s["attributi"].values() if isinstance(v, str) and EMAIL.search(v))
 
@@ -832,16 +958,31 @@ def mostra(reg: dict, registrata: bool = False):
         print(c("inverso", f" {titolo} · {reg['modo']} "))
     print(f"\n{c('grigio', 'utente:')} {reg['domanda']}\n{c('verde', 'assistente:')} {reg['risposta']}\n")
     f = reg["fattura"]
-    print(c("grigio", "log:     ") + reg["log"])
+    con_contesto = sum("campi" in r for r in reg.get("log_otel", []))
+    if con_contesto:  # dallo strato 3 le stesse righe escono anche con il contesto: si stampano li', una volta sola
+        print(c("grigio", "log:     ") + f"{con_contesto} righe «chiamata al modello» (sotto, con il contesto) · "
+              + reg["log"])
+    elif reg.get("righe"):  # una riga per ogni chiamata al modello, con l'id della richiesta e il conto della risposta
+        print(c("grigio", "log:"))
+        for riga in reg["righe"]:
+            print(f"  {dt.datetime.fromtimestamp(riga['tempo']):%H:%M:%S} {riga['livello']} {riga['testo']} "
+                  + c("grigio", logfmt(riga["campi"])))
+        print("  " + reg["log"])
+    else:  # le registrazioni di prima delle righe per chiamata
+        print(c("grigio", "log:     ") + reg["log"])
     print(c("grigio", "fattura: ") + f"{f['chiamate']} chiamate · {f['in']} token in · {f['out']} out · "
           f"$ {costo(f['in'], f['cache'], f['out']):.6f}")
+    if reg.get("metriche"):
+        mostra_metriche(reg["metriche"])
     if not span:
         return
     if reg.get("log_otel"):
         print(c("grigio", "\nlog con contesto:"))
         nomi_span = {s["id"]: s["nome"] for s in span}
         for r in reg["log_otel"]:
-            print(f"  {r['livello']:<5} {r['testo']}" + c("grigio", f"  [{nomi_span.get(r['span'], '?')}]"))
+            campi = {k: v for k, v in r.get("campi", {}).items() if k not in ("richiesta", "modello")}
+            print(f"  {r['livello']:<5} {r['testo']}" + (c("grigio", " " + logfmt(campi)) if campi else "")
+                  + c("grigio", f"  [{nomi_span.get(r['span'], '?')}]"))
     tracce = per_trace(span)
     print(c("grigio", f"\n{len(tracce)} trace per questa richiesta · {len(span)} span\n"))
     t0 = min(x["inizio"] for x in span)
@@ -1149,6 +1290,28 @@ def token_per_agente(span) -> dict:
         if t := token(x):
             nome = agente_di(x, per_id)
             fuori[nome] = fuori.get(nome, 0) + t["in"] + t["out"]
+    return fuori
+
+
+def chiamate_dagli_span(span) -> list[dict]:
+    """Le chiamate al modello ricostruite dagli span, dallo strato 2 in su, in ordine di fine: l'agente e il suo
+    invoke_agent (lo span corrente quando la riga di log parte), la fine e il conto con i nomi del provider. Servono a
+    tempo.py: le registrazioni del banco del 5/11 sono di prima delle righe per chiamata e delle metriche, e righe e
+    misure si rifanno da qui, con le cifre di quella run. L'SDK scrive gen_ai.usage.input_tokens con la cache dentro."""
+    per_id, fuori = {x["id"]: x for x in span}, []
+    for x in sorted(span, key=lambda x: x["fine"]):
+        if (t := token(x)) is None:
+            continue
+        y = x
+        while y and attr(y, "gen_ai.operation.name") != "invoke_agent":
+            y = per_id.get(y["padre"])
+        if y is None:  # sotto lo strato 2 l'agente non si sa
+            continue
+        scritti = attr(x, "gen_ai.usage.cache_write.input_tokens") or 0
+        fuori.append({"agente": attr(y, "gen_ai.agent.name"), "span": y["id"], "trace": x["trace"], "fine": x["fine"],
+                      "campi": {"agente": attr(y, "gen_ai.agent.name"), "modello": attr(x, "gen_ai.response.model", MODEL),
+                                "input_tokens": t["in"] - t["cache"] - scritti, "output_tokens": t["out"],
+                                "cache_read_input_tokens": t["cache"], "cache_creation_input_tokens": scritti}})
     return fuori
 
 

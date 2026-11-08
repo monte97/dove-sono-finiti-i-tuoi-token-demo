@@ -1,4 +1,5 @@
-# Riceve OTLP HTTP (span e log) e smista: le trace a Tempo, i log al Loki nativo OTLP
+# Riceve OTLP HTTP (span, log e metriche) e smista: le trace a Tempo, i log al Loki nativo OTLP, le metriche al
+# ricevitore OTLP di Prometheus (con gli exemplar)
 receivers:
   otlp:
     protocols:
@@ -11,6 +12,8 @@ exporters:
       insecure: true
   otlphttp/loki:
     endpoint: http://loki:3100/otlp
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
 service:
   pipelines:
     traces:
@@ -19,3 +22,6 @@ service:
     logs:
       receivers: [otlp]
       exporters: [otlphttp/loki]
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp/prometheus]

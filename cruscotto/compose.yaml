@@ -1,4 +1,4 @@
-# Porte fuori da 3000/3100/3200/4317/4318: Grafana 3377, Tempo 3210, OTLP HTTP 4418 (e' del collector)
+# Porte fuori da 3000/3100/3200/4317/4318/9090: Grafana 3377, Tempo 3210, Loki 3110, Prometheus 3990, OTLP HTTP 4418 (e' del collector)
 name: osservare-a-strati
 services:
   collector:
@@ -7,7 +7,7 @@ services:
     volumes:
       - ./collector.yaml:/etc/collector.yaml:ro
     ports: ["4418:4318"]
-    depends_on: [tempo, loki]
+    depends_on: [tempo, loki, prometheus]
   tempo:
     image: grafana/tempo:2.8.1
     command: ["-config.file=/etc/tempo.yaml"]
@@ -23,6 +23,15 @@ services:
       - ./loki.yaml:/etc/loki.yaml:ro
       - loki:/loki
     ports: ["3110:3100"]
+  prometheus:
+    image: prom/prometheus:v3.9.1
+    # il ricevitore OTLP e gli exemplar (la trace di una misura) sono spenti se non li chiedi
+    command: ["--config.file=/etc/prometheus/prometheus.yaml", "--storage.tsdb.path=/prometheus",
+              "--web.enable-otlp-receiver", "--enable-feature=exemplar-storage"]
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus:/prometheus
+    ports: ["3990:9090"]
   grafana:
     image: grafana/grafana:12.0.2
     environment:
@@ -33,8 +42,10 @@ services:
       - ./grafana/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml:ro
       - ./grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
       - ./grafana/segnali.json:/var/lib/grafana/dashboards/segnali.json:ro
+      - ./grafana/token.json:/var/lib/grafana/dashboards/token.json:ro
     ports: ["3377:3000"]
-    depends_on: [tempo, loki]
+    depends_on: [tempo, loki, prometheus]
 volumes:
   tempo:
   loki:
+  prometheus:

@@ -1,0 +1,6 @@
+# Prometheus solo come archivio delle metriche OTLP: nessuno scrape, il collector le spinge su /api/v1/otlp.
+# Il nome del servizio e la versione diventano etichette, come sugli span e sui log.
+global:
+  evaluation_interval: 15s
+otlp:
+  promote_resource_attributes: [service.name, service.version]

@@ -45,8 +45,8 @@ approva. Nessuno ha sbagliato, e i token in ingresso stanno quasi tutti in `avvi
 
 | strato | cosa si accende |
 |---|---|
-| 0 | oggi: una riga di log e la fattura (la somma dell'usage), niente OpenTelemetry |
-| 1 | l'SDK: la strumentazione nativa di Anthropic (`open_telemetry=`) |
+| 0 | oggi: una riga di log per ogni chiamata al modello, con l'agente, il conto della risposta (`input_tokens`, `output_tokens`, cache) e un id della richiesta, e la fattura (la somma dell'usage); niente OpenTelemetry |
+| 1 | le metriche dei token e l'SDK: due contatori per chiamata con i nomi delle convenzioni GenAI (`gen_ai.client.inference.usage.input_tokens` e `output_tokens`, più `gen_ai.agent.name`), un istogramma mio (`assistente.agente.token`, un valore per agente a fine richiesta) e la strumentazione nativa di Anthropic (`open_telemetry=`) |
 | 2 | gli agenti: gli span `invoke_workflow`, `invoke_agent` e gli archi fra agenti, scritti a mano, con il contesto propagato ai thread dei rami paralleli |
 | 3 | lo strumento: lo span `execute_tool` con argomenti e risultato, più i log correlati: le righe di `logging` dello strumento escono con `trace_id` e `span_id` |
 | 4 | i dati letti: da dove viene il dato e quanto. Per `leggi_programma` la data di pubblicazione, per `leggi_avvisi` pagine e avvisi letti, filtro usato e ora dell'ultimo aggiornamento |
@@ -58,7 +58,20 @@ senza una convenzione OpenTelemetry hanno un prefisso proprio (`avvisi.pagine`, 
 
 Un fatto dell'SDK `anthropic` 1.15.0, verificato il 5/11/2026 su `_tracing.py`: il contenuto esce solo come
 attributi di span (`gen_ai.input.messages`, `gen_ai.output.messages`). Non ci sono eventi, né log, né metriche.
-Per questo i log correlati dello strato 3 sono quelli dello strumento, non quelli dell'SDK.
+Per questo i log correlati dello strato 3 sono quelli dello strumento e le righe per chiamata scritte dall'app, e le
+metriche dello strato 1 le emette l'app: nessuna viene dall'SDK.
+
+La riga per chiamata dello strato 0 esce da `logging` con i campi come `extra`; dallo strato 3 lo stesso handler di
+OpenTelemetry la porta in Loki con `trace_id` e `span_id`, e i campi diventano metadati strutturati. In Loki la
+richiesta si ritrova dal suo id e si somma per agente:
+
+```logql
+{service_name="osservare-a-strati"} | richiesta="7923fcc3"
+sum by (agente) (sum_over_time({service_name="osservare-a-strati"} | richiesta="7923fcc3" | unwrap input_tokens [1h]))
+```
+
+L'istogramma `assistente.agente.token` si registra dentro lo span della richiesta: dallo strato 2 ogni misura porta la
+sua trace come exemplar, e da Prometheus si salta alla trace in Tempo.
 
 ## Rigiocare le run, senza chiave
 
@@ -143,16 +156,27 @@ Si guardano correttezza e token. Una volta vista la causa, la correzione è bana
 
 ## Il cruscotto
 
-I segnali su Grafana, letti da Tempo con TraceQL, e i log correlati letti da Loki: dallo span di uno strumento si
-salta alle sue righe di log (stesso trace id). Un collector riceve OTLP HTTP e smista span a Tempo e log a Loki.
-Le porte stanno fuori da 3000, 3100, 3200 e 4317/4318: Grafana su 3377, Tempo su 3210, Loki su 3110, OTLP HTTP su 4418.
+I segnali su Grafana, letti da Tempo con TraceQL, i log correlati letti da Loki e le metriche dei token in Prometheus:
+dallo span di uno strumento si salta alle sue righe di log (stesso trace id), da una riga di log alla sua trace, da un
+exemplar dell'istogramma alla trace della richiesta. Un collector riceve OTLP HTTP e smista span a Tempo, log a Loki e
+metriche al ricevitore OTLP di Prometheus (acceso con `--web.enable-otlp-receiver`, exemplar con
+`--enable-feature=exemplar-storage`). Le porte stanno fuori da 3000, 3100, 3200, 4317/4318 e 9090: Grafana su 3377,
+Tempo su 3210, Loki su 3110, Prometheus su 3990, OTLP HTTP su 4418.
 
 ```bash
 docker compose -f cruscotto/compose.yaml up -d
 .venv/bin/python tempo.py registrazioni/strato-5 registrazioni/strato-5-correzione   # span e log, come appena finiti
 .venv/bin/python verifica_cruscotto.py registrazioni/strato-5 registrazioni/strato-5-correzione   # cruscotto contro segnali.py
 open "http://localhost:3377/d/segnali?var-cartella=strato-5&var-modo=guasto"
+open "http://localhost:3377/d/token?var-cartella=strato-5&var-modo=guasto&var-richiesta=7923fcc3"   # la richiesta di Giulia
 ```
+
+Il cruscotto «I token, per agente» (`token`) legge l'istogramma e i contatori da Prometheus e le righe per chiamata da
+Loki. Le registrazioni del banco del 5/11 sono di prima delle righe per chiamata e delle metriche: `tempo.py` le rifà
+dagli span della stessa run (`strati.chiamate_dagli_span`), con le cifre di quella run, l'id della richiesta stabile
+(dalla trace originale: la richiesta di Giulia, `strato-5/20261105-202614-guasto.json`, è `7923fcc3`) e gli exemplar
+sulle trace rimandate. Sul banco del 5/11, strato 5, giornata piena: avvisi spende 866.266 token su 1.346.654 (64%);
+in una richiesta 17 mila token in 11 richieste, circa 34 mila in 18, 52 mila in una, cioè una, due o tre volte.
 
 Le metriche TraceQL contano span, non richieste: per questo ogni richiesta porta i suoi fatti sullo span in
 cima, `invoke_workflow` (`richiesta.forma`, `richiesta.costo_microusd`, `richiesta.quota_avvisi_pct`,

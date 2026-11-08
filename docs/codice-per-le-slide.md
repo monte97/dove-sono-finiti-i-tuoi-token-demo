@@ -2,10 +2,18 @@
 
 Uscita di `.venv/bin/python strati.py --codice N`, per N da 0 a 5, e di `--righe`. Le righe `...` separano frammenti presi da punti diversi di `strati.py`.
 
-## Strato 0: un log e una fattura, tutto quello che si ha oggi.
+## Strato 0: una riga di log per chiamata e la fattura, tutto quello che si ha oggi.
 
 ```python
+u = r.usage
+LOG.info("chiamata al modello", extra={"richiesta": stato["richiesta"], "agente": nome, "modello": r.model,
+                                       "input_tokens": u.input_tokens, "output_tokens": u.output_tokens,
+                                       "cache_read_input_tokens": u.cache_read_input_tokens or 0,
+                                       "cache_creation_input_tokens": u.cache_creation_input_tokens or 0})
+...
 stato["fattura"].append(r.usage)
+...
+stato["richiesta"] = uuid.uuid4().hex[:8]
 ...
 inizio = time.monotonic()
 ...
@@ -17,25 +25,50 @@ secondi = time.monotonic() - inizio
             "out": sum(x.output_tokens for x in u)},
 ```
 
-Il blocco sotto lo strato 0 ha due frammenti non autonomi: le chiavi `"log"` e `"fattura"` stanno fuori dal dizionario che le contiene (restano la virgola finale e il `}` mancante del dizionario esterno). Su una slide serve avvolgerle in un `return {...}`.
+La riga per chiamata è il primo frammento: dopo `r = client.messages.create(...)` (riga applicativa, non marcata) `u` è il conto della risposta, con i nomi dei campi del provider. `stato["richiesta"]` nasce in `esegui`. Le chiavi `"log"` e `"fattura"` stanno fuori dal dizionario che le contiene (restano la virgola finale e il `}` mancante del dizionario esterno): su una slide serve avvolgerle in un `return {...}`.
 
-## Strato 1: l'SDK produce gli span, con il contenuto spento (`metadata_only`).
+## Strato 1: le metriche dei token e l'SDK (gli span, con il contenuto spento: `metadata_only`).
 
 ```python
+from opentelemetry.sdk.resources import Resource
+...
+VERSIONE = "2026-11-05"
+RISORSA = Resource.create({"service.name": "osservare-a-strati", "service.version": VERSIONE})
+...
+provider = MeterProvider(resource=RISORSA, metric_readers=lettori)
+misura = provider.get_meter("osservare-a-strati")
+TOKEN_IN = misura.create_counter("gen_ai.client.inference.usage.input_tokens", unit="{token}")
+TOKEN_OUT = misura.create_counter("gen_ai.client.inference.usage.output_tokens", unit="{token}")
+TOKEN_AGENTE = misura.create_histogram("assistente.agente.token", unit="{token}",
+                                       description="token di un agente in una richiesta",
+                                       explicit_bucket_boundaries_advisory=CONFINI_TOKEN)
+...
 memoria = InMemorySpanExporter()
 ...
-provider = TracerProvider()
+provider = TracerProvider(resource=RISORSA)
 processore = SimpleSpanProcessor(memoria)
 ...
 provider.add_span_processor(processore)
+...
+attributi = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "anthropic",
+             "gen_ai.token.modality": "text", "gen_ai.request.model": MODEL,
+             "gen_ai.response.model": r.model, "gen_ai.agent.name": nome}
+ingresso = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
+TOKEN_IN.add(ingresso, attributi)
+TOKEN_OUT.add(u.output_tokens, attributi)
+with stato["lock"]:
+    stato["per_agente"][nome] = stato["per_agente"].get(nome, 0) + ingresso + u.output_tokens
 ...
 modo = "metadata_only"
 ...
 return anthropic.Anthropic(open_telemetry={"tracer_provider": provider,
                                            "traces": {"content_mode": modo}})
+...
+for nome, n in stato["per_agente"].items():
+    TOKEN_AGENTE.record(n, {"gen_ai.agent.name": nome})
 ```
 
-Nessun frammento pendente. `modo` è assegnato prima e usato nell'ultima riga: il `return` sta fuori da una funzione, senza la funzione che lo contiene.
+Frammenti non autonomi: `lettori` (la memoria e, con `--otlp`, l'esportazione periodica) è impalcatura e non compare; `r`, `u` e `nome` sono quelli di `ciclo`; il `for` finale sta dentro lo span `invoke_workflow`, per questo dallo strato 2 ogni misura porta la trace come exemplar. Il `return` sta fuori da una funzione, senza la funzione che lo contiene.
 
 ## Strato 2: gli agenti diventano archi dell'albero, con la guardia contro i cicli.
 
@@ -151,9 +184,9 @@ Autonomo, salvo `EMAIL`, `ReadableSpan` e `SpanProcessor` non importati, e `modo
 ## Quante righe pesa ogni strato
 
 ```
-strato 0 · oggi: un log e una fattura     7 righe
-strato 1 · l'SDK                          7 righe
-strato 2 · gli agenti                    16 righe
+strato 0 · oggi: un log e una fattura    13 righe
+strato 1 · le metriche e l'SDK           29 righe
+strato 2 · gli agenti                    18 righe
 strato 3 · lo strumento                  18 righe
 strato 4 · i dati letti                   8 righe
 strato 5 · il contenuto                  24 righe

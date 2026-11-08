@@ -1,8 +1,12 @@
-"""Rimanda le registrazioni (span e log correlati) al collector via OTLP, con id nuovi e orari spostati ad adesso, per il cruscotto.
+"""Rimanda le registrazioni (span, log correlati e metriche) al collector via OTLP, con id nuovi e orari spostati ad adesso, per il cruscotto.
+
+Le registrazioni del banco del 5/11 sono di prima delle righe di log per chiamata e delle metriche: righe e misure si
+rifanno dagli span della stessa run (strati.chiamate_dagli_span), con le cifre di quella run.
 
 Uso: python tempo.py [--otlp URL] CARTELLA ...
 """
 import argparse
+import hashlib
 import json
 import random
 import time
@@ -14,7 +18,7 @@ from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
-from opentelemetry.trace import SpanContext, Status, StatusCode, TraceFlags
+from opentelemetry.trace import NonRecordingSpan, SpanContext, Status, StatusCode, TraceFlags, set_span_in_context
 
 import segnali as sg
 import strati
@@ -72,14 +76,55 @@ def in_otlp(r: dict, cartella: str, adesso: float, mappa: dict | None = None) ->
     return fuori
 
 
-def log_in_otlp(r: dict, mappa: dict) -> list[ReadableLogRecord]:
+def righe_ricostruite(r: dict) -> list[dict]:
+    """Le righe di log per chiamata, come log correlati. Se la registrazione le ha gia' (dallo strato 3, in log_otel con
+    i loro campi) non serve niente; altrimenti si ricostruiscono dagli span, con lo stesso testo e gli stessi campi della
+    riga dal vivo, dentro l'invoke_agent dell'agente che ha chiamato il modello."""
+    if any("campi" in l for l in r.get("log_otel", [])):
+        return []
+    # l'id della richiesta: quello della run se c'e'; altrimenti stabile, dalla trace originale, cosi' a ogni rinvio e'
+    # lo stesso e una slide o uno screenshot restano confrontabili
+    richiesta = r.get("richiesta") or hashlib.sha1(r["span"][0]["trace"].encode()).hexdigest()[:8]
+    return [{"trace": ch["trace"], "span": ch["span"], "livello": "INFO", "testo": "chiamata al modello",
+             "tempo": ch["fine"], "campi": {"richiesta": richiesta, **ch["campi"]}}
+            for ch in strati.chiamate_dagli_span(r["span"])]
+
+
+def contesto_di(mappa: dict, traccia: str, span_id: str):
+    """Il contesto di uno span rimappato, per gli exemplar: la misura porta la trace che il cruscotto apre."""
+    return set_span_in_context(NonRecordingSpan(SpanContext(mappa["tracce"][traccia], mappa["ids"][span_id], False,
+                                                            TraceFlags(TraceFlags.SAMPLED))))
+
+
+def misura(r: dict, mappa: dict, cartella: str):
+    """Le metriche della run come le misura lo strato 1: i contatori per chiamata dentro l'invoke_agent di chi chiama,
+    l'istogramma per agente dentro la radice. Gli strumenti sono quelli di strati.fai_metriche."""
+    banco, per_agente = {"banco.cartella": cartella, "banco.modo": r["modo"]}, {}
+    for ch in strati.chiamate_dagli_span(r["span"]):
+        k = ch["campi"]
+        attributi = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "anthropic", "gen_ai.token.modality": "text",
+                     "gen_ai.request.model": strati.MODEL, "gen_ai.response.model": k["modello"],
+                     "gen_ai.agent.name": ch["agente"], **banco}
+        ingresso = k["input_tokens"] + k["cache_read_input_tokens"] + k["cache_creation_input_tokens"]
+        contesto = contesto_di(mappa, ch["trace"], ch["span"])
+        strati.TOKEN_IN.add(ingresso, attributi, context=contesto)
+        strati.TOKEN_OUT.add(k["output_tokens"], attributi, context=contesto)
+        per_agente[ch["agente"]] = per_agente.get(ch["agente"], 0) + ingresso + k["output_tokens"]
+    radice = next((x for x in r["span"] if x["nome"].startswith("invoke_workflow")), None)
+    contesto = contesto_di(mappa, radice["trace"], radice["id"]) if radice else None
+    for agente, n in per_agente.items():
+        strati.TOKEN_AGENTE.record(n, {"gen_ai.agent.name": agente, **banco}, context=contesto)
+    return len(per_agente)
+
+
+def log_in_otlp(r: dict, mappa: dict, aggiunte: list[dict] = ()) -> list[ReadableLogRecord]:
     """I log correlati della registrazione, con gli id rimappati come quelli degli span. Ogni record porta il suo
     orario (`tempo`, spostato come quello degli span); se manca (registrazioni senza il campo) prende l'inizio
     spostato del suo span, piu' un millisecondo per posto, per tenere l'ordine. In ogni caso resta dentro lo span a
     cui appartiene. Un log il cui span non e' nella registrazione si salta: non avrebbe una trace a cui appartenere."""
     per_id = {x["id"]: x for x in r["span"]}
     posto, fuori = {}, []
-    for l in r.get("log_otel", []):
+    for l in list(r.get("log_otel", [])) + list(aggiunte):
         x = per_id.get(l["span"])
         if x is None:
             continue
@@ -92,7 +137,8 @@ def log_in_otlp(r: dict, mappa: dict) -> list[ReadableLogRecord]:
         fuori.append(ReadableLogRecord(
             LogRecord(timestamp=ora, observed_timestamp=ora, trace_id=mappa["tracce"][x["trace"]],
                       span_id=mappa["ids"][x["id"]], trace_flags=TraceFlags(TraceFlags.SAMPLED),
-                      severity_text=l["livello"], severity_number=numero, body=l["testo"]),
+                      severity_text=l["livello"], severity_number=numero, body=l["testo"],
+                      attributes=l.get("campi") or None),
             resource=RISORSA, instrumentation_scope=InstrumentationScope("osservare-a-strati")))
     return fuori
 
@@ -122,6 +168,8 @@ if __name__ == "__main__":
     p.add_argument("cartelle", nargs="+", type=Path)
     a = p.parse_args()
     esporta, esporta_log = OTLPSpanExporter(endpoint=a.otlp), OTLPLogExporter(endpoint=strati.url_log(a.otlp))
+    strati.STRATO, strati.OTLP = 5, a.otlp  # gli strumenti delle metriche, con l'esportazione OTLP
+    strati.fai_metriche()
     cerca = cerca_in_tempo(a.tempo)
     for cartella in a.cartelle:
         if not a.ancora and gia_in_tempo(cartella.name, cerca):
@@ -133,8 +181,10 @@ if __name__ == "__main__":
                 continue
             mappa = rimappa(r, time.time())
             esito = esporta.export(in_otlp(r, cartella.name, time.time(), mappa))
-            if logs := log_in_otlp(r, mappa):
+            if logs := log_in_otlp(r, mappa, righe_ricostruite(r)):
                 esito_log = esporta_log.export(logs)
                 print(cartella.name, f.name, "log", len(logs), esito_log.name)
-            print(cartella.name, f.name, esito.name)
+            agenti = misura(r, mappa, cartella.name)
+            strati._provider_metriche.force_flush()  # una richiesta per esportazione: gli exemplar sono suoi
+            print(cartella.name, f.name, esito.name, "metriche", agenti, "agenti")
             time.sleep(0.1)
