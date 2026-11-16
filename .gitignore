@@ -1,3 +1,9 @@
 .env
 .venv/
 __pycache__/
+
+# fuori dalla versione pubblica (16/11/2026): restano in locale
+archivio/
+docs/superpowers/
+docs/run-da-mostrare.md
+docs/codice-per-le-slide.md

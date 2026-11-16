@@ -594,7 +594,7 @@ def test_approva_solo_un_verificato_in_fondo():
     assert not s.approva("Non posso aggiungere «Verificato.» alla versione attuale.")
     assert not s.approva("Il dato potrebbe non essere aggiornato, conviene verificarlo presso la segreteria.")
     assert not s.approva("Conviene verificare sul programma ufficiale orario, sala e giorno.")
-    # in apertura, come ha fatto valida nel banco del 5/11 (archivio/taratura-2026-11-05/giro-3 182416)
+    # in apertura, come ha fatto valida nel banco del 5/11 (taratura del 5/11, giro 3, run 182416)
     assert s.approva("Verificato. Il workshop \"Kubernetes da zero\" si tiene oggi alle 15:00 in sala B, al piano 1.")
     assert s.approva("Verificato.\n\nIl workshop si tiene oggi alle 15:00 nella sala B, al piano 1.")
     assert s.approva("**Verificato.** Il workshop si tiene oggi alle 15:00 in sala B.")

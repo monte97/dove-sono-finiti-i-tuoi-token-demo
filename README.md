@@ -1,5 +1,9 @@
 # Osservare a strati
 
+> **Lavori in corso.** Il talk è del 28 novembre 2026 e questa demo si sta ancora finendo: codice, registrazioni
+> e numeri possono cambiare fino ad allora, e qualche documento in `docs/` è ancora una bozza. Le slide arriveranno
+> dopo il talk.
+
 La demo del talk «Dove sono finiti i tuoi token? Tracciare un sistema multi-agente con OpenTelemetry»
 (DevFest Alps 2026, Torino). Un assistente a cinque agenti risponde a una domanda semplice con un orario
 sbagliato e un `200 OK`, e lo si guarda con sei livelli di strumentazione: ogni strato aggiunge poche righe di
@@ -84,8 +88,7 @@ python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 Le registrazioni di questa versione (con il campo `log_otel`) escono dal banco qui sotto e finiscono in
-`registrazioni/`, che parte vuota. Il banco del sistema precedente sta in `archivio/banco-2026-11-06/`, fuori
-da `--riepilogo`, `--misure` e `segnali.py`. Finché il banco non è stato rifatto, i numeri di questa versione
+`registrazioni/`, che parte vuota. Il banco del sistema precedente non è nel repo pubblico. Finché il banco non è stato rifatto, i numeri di questa versione
 non esistono: le righe della tabella in `docs/banco-rami-paralleli.md` sono segnate `[banco]`.
 
 ## Le misure
@@ -237,8 +240,17 @@ Il banco del 5/11 sta dentro: 0 giuste e 22 sbagliate su 30 nella giornata piena
 tranquilla. Le 8 risposte che non sono sbagliate avvertono l'utente: in 7 è `avvisi` a riportare l'avviso a
 `coordina` (in 6 alla prima domanda, in 1 alla seconda), quando `coordina` chiede delle variazioni di orario o di sala; quando chiede solo del workshop,
 `avvisi` risponde «Nessun avviso.». Il ricontrollo di `valida` conferma l'errore in 12 run e lo scopre da solo in
-una. Le run da rivedere sono in `docs/run-da-mostrare.md`. Se il controllo esce dalle soglie, il modello dietro
+una. Se il controllo esce dalle soglie, il modello dietro
 l'alias è cambiato: si rifà il banco e si aggiornano i numeri.
+
+## Risultati
+
+In `risultati/` ci sono le elaborazioni delle registrazioni, rifatte dai comandi del repo.
+
+- `risultati/diciassette-alberi/`: la stessa domanda di Giulia trenta volte, nella giornata piena dello strato 5, dà
+  diciassette forme diverse dell'albero delle chiamate. `forme.tsv` è l'uscita di `strati.py --misure 5` (quante volte,
+  forma), `diciassette-alberi.png` la disegna: un riquadro per forma, un colore per agente, il fondo arancio chiaro
+  raccoglie le chiamate fatte insieme, in parallelo.
 
 ## Cosa questa demo non dice
 

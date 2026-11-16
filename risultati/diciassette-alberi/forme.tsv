@@ -1,0 +1,17 @@
+3	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale) sale(leggi_sale))} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))})
+3	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))} coordina>valida
+3	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))})
+3	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale)),sale(leggi_sale)} coordina>valida
+3	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale))})
+2	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale))} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))})
+2	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale))} coordina>valida
+2	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))} coordina>sale(leggi_sale) coordina>sale(leggi_sale) coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))})
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))} coordina>sale coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))})
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale))} coordina>{sale,valida(programma(leggi_programma sale sale(leggi_sale)))}
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale)),sale(leggi_sale)} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale) sale(leggi_sale))})
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale)),sale(leggi_sale)} coordina>valida
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))}) coordina>avvisi(leggi_avvisi)
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale {leggi_sale,leggi_sale,leggi_sale}))} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale))})
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale))} coordina>valida({avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale))})
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale(leggi_sale) sale(leggi_sale))} coordina>valida
+1	codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma sale sale(leggi_sale)),sale(leggi_sale)} coordina>valida(avvisi(leggi_avvisi))
