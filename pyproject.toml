@@ -1,0 +1,20 @@
+[project]
+name = "osservare-a-strati"
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-logging",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "httpx2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 120
