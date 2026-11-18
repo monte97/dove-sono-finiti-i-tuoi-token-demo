@@ -14,6 +14,9 @@ from opentelemetry import trace
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.trace import TracerProvider
 from server_finto import *  # noqa: F401,F403
+from osservare_a_strati.impostazioni import con
+from osservare_a_strati.osservabilita import log as oslog
+from osservare_a_strati.osservabilita import tracce
 
 def test_strato_0_solo_log_e_fattura():
     reg, fuori = corri(0)
@@ -54,7 +57,7 @@ def test_strato_1_le_metriche_dei_token():
     assert len(corri(1)[0]["metriche"]) == 15  # a ogni run solo la sua: la memoria legge in delta
     codice1 = s.codice(1)
     assert 'create_histogram("assistente.agente.token"' in codice1 and "TOKEN_AGENTE.record(n" in codice1
-    assert "TOKEN_IN.add(ingresso, attributi)" in codice1 and "if STRATO" not in codice1
+    assert "TOKEN_IN.add(ingresso, attributi)" in codice1 and "if attuali" not in codice1
 
 
 def test_strato_2_gli_exemplar_portano_la_trace_della_richiesta():
@@ -149,11 +152,8 @@ def test_strato_5_il_contenuto_e_l_email():
 
 
 def test_maschera_email():
-    try:
-        s.MASCHERA = True
+    with con(maschera=True):
         reg, fuori = corri(5)
-    finally:
-        s.MASCHERA = False
     assert s.con_email(reg["span"]) == 0 and "email dell'utente" not in fuori
     assert any("[email]" in (x["attributi"].get("gen_ai.input.messages") or "") for x in reg["span"])
     assert "[email]" in attributi(reg, "execute_tool valida")["gen_ai.tool.call.arguments"]  # anche dentro il JSON
@@ -164,13 +164,13 @@ def test_maschera_email():
 
 def test_codice_pulito():
     for n in range(6):  # niente impalcatura della demo in nessuno strato (revisione finale, I2)
-        assert not any(x in s.codice(n) for x in ("STRATO", "fai_provider", "MASCHERA")), n
+        assert "fai_provider" not in s.codice(n) and not re.search(r"\bif attuali\(\)\.strato", s.codice(n)), n
     assert 'modo = "content"' in s.codice(5) and "MascheraEmail(processore)" in s.codice(5)
     assert "MascheraEmail" not in s.codice(1) and '"tracer_provider": provider' in s.codice(1)
     assert "open_telemetry=" in s.codice(1) and "**prova" not in s.codice(1)  # la slide non porta l'argomento dei test
     assert not s.codice(3).rstrip().endswith("fai_log()")  # niente chiamata orfana in fondo
     t = s.codice(3)
-    assert 'span.set_attribute("gen_ai.tool.call.arguments"' in t and "if STRATO" not in t
+    assert 'span.set_attribute("gen_ai.tool.call.arguments"' in t and "if attuali" not in t
     assert "\nspan.set_attribute(\"gen_ai.tool.call.arguments\"" in t  # il corpo dell'if perde il rientro
     assert not any(b.startswith((" ", "\t")) for b in s.codice(0).split("\n...\n"))  # lo strato 0 esce a margine, senza il lock
     assert "lock" not in s.codice(0) and 'stato["fattura"].append(r.usage)' in s.codice(0)
@@ -181,26 +181,23 @@ def test_codice_pulito():
 def test_otlp_mascherato():
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    fuori, vero = InMemorySpanExporter(), s.processore_otlp
-    s.processore_otlp = lambda url: SimpleSpanProcessor(fuori)  # al posto di Tempo
-    vero_log, urls = s.processore_otlp_log, []
-    s.processore_otlp_log = lambda url: (urls.append(url), SimpleLogRecordProcessor(InMemoryLogRecordExporter()))[1]
-    s.OTLP, s.MASCHERA = "http://finto", True
+    fuori, vero = InMemorySpanExporter(), tracce.processore_otlp
+    tracce.processore_otlp = lambda url: SimpleSpanProcessor(fuori)  # al posto di Tempo
+    vero_log, urls = oslog.processore_otlp_log, []
+    oslog.processore_otlp_log = lambda url: (urls.append(url), SimpleLogRecordProcessor(InMemoryLogRecordExporter()))[1]
     try:
-        corri(5)
+        with con(otlp="http://finto", maschera=True):
+            corri(5)
     finally:
-        s.processore_otlp, s.processore_otlp_log, s.OTLP, s.MASCHERA = vero, vero_log, None, False
+        tracce.processore_otlp, oslog.processore_otlp_log = vero, vero_log
     assert urls == ["http://finto/v1/logs"]
     span = [s.in_dict(x) for x in fuori.get_finished_spans()]
     assert span and s.con_email(span) == 0  # l'email non esce dal processo neanche verso il backend
 
 
 def test_produzione_dal_vivo_porta_il_banco():
-    s.PRODUZIONE = True
-    try:
+    with con(produzione=True):
         reg, _ = corri(5)
-    finally:
-        s.PRODUZIONE = False
     radice = next(x for x in reg["span"] if x["padre"] is None)
     assert radice["attributi"]["banco.cartella"] == CARTELLA.name and radice["attributi"]["banco.modo"] == "guasto"
 
@@ -221,11 +218,8 @@ def test_versione_prompt_stabile_e_per_modalita():
     assert {m: s.versione_prompt(m) for m in range(4)} == HASH_BANCO
     assert len(set(HASH_BANCO.values())) == 4  # quattro modalita', quattro testi diversi
     assert s.versione_prompt(1) == s.versione_prompt(1)
-    s.CORREZIONE = 2
-    try:
+    with con(correzione=2):
         assert s.versione_prompt() == HASH_BANCO[2]  # senza argomento, la modalita' in corso
-    finally:
-        s.CORREZIONE = 0
 
 
 def test_versione_prompt_cambia_se_cambia_un_testo():
@@ -256,20 +250,14 @@ def test_versione_nella_trace_nella_resource_e_nella_registrazione():
         assert x.resource.attributes["service.name"] == "osservare-a-strati"
         assert x.resource.attributes["service.version"] == s.VERSIONE
     assert s._provider_log.resource.attributes["service.version"] == s.VERSIONE  # anche i log
-    s.CORREZIONE = 2
-    try:
+    with con(correzione=2):
         reg, _ = corri(5)
-    finally:
-        s.CORREZIONE = 0
     assert reg["versione"]["correzione"] == "filtro" and reg["versione"]["prompt"] == HASH_BANCO[2]
 
 
 def test_maschera_niente_email_negli_span_ne_nei_log():
-    try:
-        s.MASCHERA = True
+    with con(maschera=True):
         reg, _ = corri(5)
-    finally:
-        s.MASCHERA = False
     assert reg["log_otel"]  # i log ci sono...
     assert not any(s.EMAIL.search(str(l["testo"])) for l in reg["log_otel"])  # ...e senza email
     assert not any(s.EMAIL.search(json.dumps(x["attributi"], ensure_ascii=False)) for x in reg["span"])

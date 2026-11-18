@@ -17,6 +17,7 @@ import statistics
 from pathlib import Path
 
 import strati as s
+from osservare_a_strati.impostazioni import Impostazioni, imposta
 
 QUI = Path(__file__).parent
 BANCO = QUI / "registrazioni"
@@ -31,7 +32,7 @@ SDK = ("strato-1", 0, True)  # due run bastano per vedere come l'SDK scrive gli 
 
 
 def esegui(cartella: Path, correzione: int, guasto: bool, strato: int) -> dict:
-    s.STRATO, s.CORREZIONE, s.MASCHERA, s.PRODUZIONE, s.OTLP = strato, correzione, False, False, None
+    imposta(Impostazioni(strato=strato, correzione=correzione))
     return s.esegui(guasto, cartella)
 
 

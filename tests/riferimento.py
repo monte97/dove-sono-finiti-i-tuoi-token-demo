@@ -58,21 +58,23 @@ def adattatore_vecchio() -> dict:
     import segnali
     import strati
     import tempo
+    from osservare_a_strati.impostazioni import Impostazioni, imposta
+    from osservare_a_strati.osservabilita import metriche, tracce
 
     def fissa_risorsa():
         # La Resource di oggi prende un service.instance.id casuale a ogni processo: l'harness lo fissa, il codice no.
         from opentelemetry.sdk.resources import Resource
         risorsa = Resource.create({"service.name": "osservare-a-strati", "service.version": strati.VERSIONE,
                                    "service.instance.id": "00000000-0000-0000-0000-000000000000"})
-        strati.RISORSA = risorsa
+        tracce.RISORSA = risorsa
         tempo.RISORSA = risorsa
 
     def prepara_metriche():
-        strati.STRATO, strati.OTLP = 5, None  # l'harness puo' toccare i globabili; il codice della demo no
-        strati.fai_metriche()
+        imposta(Impostazioni(strato=5, otlp=None))  # l'harness puo' toccare le impostazioni; il codice della demo no
+        metriche.fai_metriche()
 
     def forza_metriche():
-        strati._provider_metriche.force_flush()
+        metriche.provider.force_flush()
 
     return {
         "fissa_risorsa": fissa_risorsa,
@@ -148,7 +150,7 @@ def controllo_segnali(ad: dict, uscita: Path):
 
 def controllo_invio(ad: dict, uscita: Path):
     ad["fissa_risorsa"]()  # il service.instance.id casuale non e' comportamento della demo: l'harness lo fissa
-    ad["prepara_metriche"]()  # solo il lettore in memoria: niente OTLP, niente rete
+    ad["prepara_metriche"]()  # solo il lettore in memoria: niente collector, niente rete
     for nome in INVIO_CARTELLE:
         cartella = REGISTRAZIONI / nome
         for f in sorted(cartella.glob("*.json")):

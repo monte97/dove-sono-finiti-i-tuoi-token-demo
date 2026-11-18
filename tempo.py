@@ -1,4 +1,4 @@
-"""Rimanda le registrazioni (span, log correlati e metriche) al collector via OTLP, con id nuovi e orari spostati ad adesso, per il cruscotto.
+"""Rimanda le registrazioni (span, log correlati e metriche) al collector, con id nuovi e orari spostati ad adesso, per il cruscotto.
 
 Le registrazioni del banco del 5/11 sono di prima delle righe di log per chiamata e delle metriche: righe e misure si
 rifanno dagli span della stessa run (strati.chiamate_dagli_span), con le cifre di quella run.
@@ -22,9 +22,11 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, Status, StatusCod
 
 import segnali as sg
 import strati
+from osservare_a_strati.impostazioni import Impostazioni, imposta
+from osservare_a_strati.osservabilita import metriche, tracce
 
 # La stessa Resource delle run dal vivo (servizio e versione): su span e su log.
-RISORSA = strati.RISORSA
+RISORSA = tracce.RISORSA
 
 
 def versione_della_registrazione(r: dict) -> dict:
@@ -107,13 +109,13 @@ def misura(r: dict, mappa: dict, cartella: str):
                      "gen_ai.agent.name": ch["agente"], **banco}
         ingresso = k["gen_ai.usage.input_tokens"]  # con la cache dentro, come nelle convenzioni
         contesto = contesto_di(mappa, ch["trace"], ch["span"])
-        strati.TOKEN_IN.add(ingresso, attributi, context=contesto)
-        strati.TOKEN_OUT.add(k["gen_ai.usage.output_tokens"], attributi, context=contesto)
+        metriche.TOKEN_IN.add(ingresso, attributi, context=contesto)
+        metriche.TOKEN_OUT.add(k["gen_ai.usage.output_tokens"], attributi, context=contesto)
         per_agente[ch["agente"]] = per_agente.get(ch["agente"], 0) + ingresso + k["gen_ai.usage.output_tokens"]
     radice = next((x for x in r["span"] if x["nome"].startswith("invoke_workflow")), None)
     contesto = contesto_di(mappa, radice["trace"], radice["id"]) if radice else None
     for agente, n in per_agente.items():
-        strati.TOKEN_AGENTE.record(n, {"gen_ai.agent.name": agente, **banco}, context=contesto)
+        metriche.TOKEN_AGENTE.record(n, {"gen_ai.agent.name": agente, **banco}, context=contesto)
     return len(per_agente)
 
 
@@ -168,8 +170,8 @@ if __name__ == "__main__":
     p.add_argument("cartelle", nargs="+", type=Path)
     a = p.parse_args()
     esporta, esporta_log = OTLPSpanExporter(endpoint=a.otlp), OTLPLogExporter(endpoint=strati.url_log(a.otlp))
-    strati.STRATO, strati.OTLP = 5, a.otlp  # gli strumenti delle metriche, con l'esportazione OTLP
-    strati.fai_metriche()
+    imposta(Impostazioni(strato=5, otlp=a.otlp))  # gli strumenti delle metriche, con l'esportazione al collector
+    metriche.fai_metriche()
     cerca = cerca_in_tempo(a.tempo)
     for cartella in a.cartelle:
         if not a.ancora and gia_in_tempo(cartella.name, cerca):
@@ -185,6 +187,6 @@ if __name__ == "__main__":
                 esito_log = esporta_log.export(logs)
                 print(cartella.name, f.name, "log", len(logs), esito_log.name)
             agenti = misura(r, mappa, cartella.name)
-            strati._provider_metriche.force_flush()  # una richiesta per esportazione: gli exemplar sono suoi
+            metriche.provider.force_flush()  # una richiesta per esportazione: gli exemplar sono suoi
             print(cartella.name, f.name, esito.name, "metriche", agenti, "agenti")
             time.sleep(0.1)

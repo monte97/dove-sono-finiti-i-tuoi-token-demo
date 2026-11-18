@@ -13,6 +13,7 @@ import server_finto as sf
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from server_finto import *  # noqa: F401,F403
+from osservare_a_strati.impostazioni import con
 
 def test_strato_3_gli_strumenti_con_argomenti_e_risultato():
     reg, _ = corri(3)
@@ -42,11 +43,8 @@ def test_strato_4_da_dove_viene_il_dato_e_quanto():
 
 
 def test_strato_4_con_il_filtro_per_sala():
-    try:
-        s.CORREZIONE = 2
+    with con(correzione=2):
         reg, _ = corri(4)
-    finally:
-        s.CORREZIONE = 0
     a = attributi(reg, "execute_tool leggi_avvisi")
     assert (a["avvisi.pagine"], a["avvisi.letti"], a["avvisi.filtro"]) == (1, 1, "sala B")
     assert any("filtro sala B" in r["testo"] for r in reg["log_otel"])
@@ -160,13 +158,12 @@ def test_avvisi_deterministici_e_senza_workshop():
 
 
 def test_correzione_istruzioni_e_filtro_per_sala():
-    try:
-        s.CORREZIONE = 1
+    with con(correzione=1):
         reg, _ = corri(5)
         assert istruzioni_di("su quella sala.") and reg["correzione"] == 1
         assert s.schemi()["leggi_avvisi"]["input_schema"].get("required") is None
         assert "Nessun avviso" not in s.leggi_dato("leggi_avvisi", {}, {"piena": True})  # col passo 1 le pagine sono tutte
-        s.CORREZIONE = 2
+    with con(correzione=2):
         reg, _ = corri(5)
         assert reg["correzione"] == 2 and s.schemi()["leggi_avvisi"]["input_schema"]["required"] == ["sala"]
         assert istruzioni_di("usa quella indicata nella richiesta.")
@@ -177,8 +174,6 @@ def test_correzione_istruzioni_e_filtro_per_sala():
             assert s.leggi_dato("leggi_avvisi", {"sala": variante}, {"piena": True}) == "- " + s.AVVISO_CHIAVE, variante
         assert s.schemi()["leggi_avvisi"]["input_schema"]["properties"]["sala"]["enum"] == ["A", "B", "C"]
         assert s.leggi_dato("leggi_avvisi", {"sala": "A"}, {"piena": True}).startswith("- Sala A:")
-    finally:
-        s.CORREZIONE = 0
 
 
 def test_strumento_sconosciuto_e_un_errore():
@@ -236,15 +231,12 @@ def test_dialogo_avvisi_chiede_a_programma():
     reg, _ = corri_annidato(correzione=3, dialogo=True)
     assert reg["correzione"] == 3
     # la correzione 3 e' un'alternativa: coordina e leggi_avvisi come nel guasto
-    try:
-        s.CORREZIONE = 3
+    with con(correzione=3):
         assert s.istruzioni_coordina() == s.ISTRUZIONI["coordina"]
         assert s.schemi()["leggi_avvisi"]["input_schema"].get("required") is None
         _, istr, strumenti = s.agenti_strumento()["avvisi"]
         assert istr == s.ISTRUZIONI["avvisi"] + s.CORREZIONE_DIALOGO and strumenti == ["leggi_avvisi", "programma"]
         assert "Nessun avviso" not in s.leggi_dato("leggi_avvisi", {}, {"piena": True})
-    finally:
-        s.CORREZIONE = 0
     assert s.CORREZIONE_DIALOGO.count(".") == 1  # una frase sola
     assert s.agenti_strumento()["avvisi"][2] == ["leggi_avvisi"] and s.agenti_strumento()["avvisi"][1] == s.ISTRUZIONI["avvisi"]
     assert any(isinstance(c.get("system"), str) and c["system"].endswith("all'agente programma.") for c in CORPI)

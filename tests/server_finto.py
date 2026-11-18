@@ -11,6 +11,7 @@ import httpx2 as httpx
 
 import segnali as sg
 import strati as s
+from osservare_a_strati.impostazioni import con
 
 CARTELLA = Path(tempfile.mkdtemp())
 INTESTAZIONI = {"request-id": "req_finto", "anthropic-organization-id": "org-finta", "anthropic-workspace-id": "wrk-finto"}
@@ -134,12 +135,12 @@ def risposta_finta(richiesta):
 
 
 def corri(strato, guasto=True):
-    s.STRATO = strato
-    http = httpx.Client(transport=httpx.MockTransport(risposta_finta))
-    client = s.cliente(api_key="finta", http_client=http)
-    with contextlib.redirect_stdout(io.StringIO()) as fuori:
-        reg = s.esegui(guasto, CARTELLA, client=client)
-        s.mostra(reg)
+    with con(strato=strato):
+        http = httpx.Client(transport=httpx.MockTransport(risposta_finta))
+        client = s.cliente(api_key="finta", http_client=http)
+        with contextlib.redirect_stdout(io.StringIO()) as fuori:
+            reg = s.esegui(guasto, CARTELLA, client=client)
+            s.mostra(reg)
     return reg, re.sub(r"\033\[\d+m", "", fuori.getvalue())  # senza colori
 
 
@@ -171,12 +172,8 @@ def istruzioni_di(agente_istruzioni_finiscono):
 
 def corri_annidato(strato=5, correzione=0, guasto=True, **scelte):
     """Una run con il modello finto che si fa chiamare fra agenti (vedi FINTO) e la correzione scelta."""
-    try:
-        s.CORREZIONE = correzione
-        with finto(**scelte):
-            return corri(strato, guasto)
-    finally:
-        s.CORREZIONE = 0
+    with con(correzione=correzione), finto(**scelte):
+        return corri(strato, guasto)
 
 
 def percorso(reg, x):

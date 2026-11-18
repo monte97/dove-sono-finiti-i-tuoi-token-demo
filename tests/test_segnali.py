@@ -13,6 +13,7 @@ import server_finto as sf
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from server_finto import *  # noqa: F401,F403
+from osservare_a_strati.impostazioni import con
 
 def test_forma_non_dipende_dall_ordine_dei_rami_paralleli():
     a = run((("programma", 3.0), ("sale", 3.01), ("avvisi", 3.02)))
@@ -72,11 +73,8 @@ def test_riassunto_della_run():
 
 
 def test_riassunto_sulla_radice():
-    s.PRODUZIONE = True
-    try:
+    with con(produzione=True):
         reg, _ = corri(5)
-    finally:
-        s.PRODUZIONE = False
     radice = next(x for x in reg["span"] if x["padre"] is None)
     atteso = sg.riassunto({**reg, "span": [x for x in reg["span"] if x is not radice]})
     assert atteso["richiesta.forma"] and atteso["richiesta.costo_microusd"] > 0

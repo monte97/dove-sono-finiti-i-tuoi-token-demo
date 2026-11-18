@@ -35,7 +35,6 @@ import contextvars  # s2
 import datetime as dt
 import hashlib
 import json
-import logging
 import re
 import statistics
 import sys
@@ -46,18 +45,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import anthropic
 from dotenv import load_dotenv
 from opentelemetry import trace
-from opentelemetry.instrumentation.logging.handler import LoggingHandler  # s3
-from opentelemetry.sdk._logs import LoggerProvider  # s3
-from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor  # s3
-from opentelemetry.sdk.metrics import Counter, Histogram, MeterProvider
-from opentelemetry.sdk.metrics.export import AggregationTemporality, InMemoryMetricReader
-from opentelemetry.sdk.resources import Resource  # s1
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from osservare_a_strati.evento.avvisi import (AVVISO_ALLARME, AVVISO_CHIAVE, AVVISI_PER_PAGINA, PAGINA_AVVISO,
                                               PAGINE_PIENA, PAGINE_TRANQUILLA, SEME_AVVISI, _MODELLI, _ORE, _voce, avvisi)
@@ -68,212 +57,42 @@ from osservare_a_strati.valutazione import (APPROVA, AVVISI_CAUSA, AVVISI_NEGA, 
                                             CLASSI_DOMANDA, ESITI, _CONFINE_CLAUSOLA, _QUATTORDICI_POSSIBILE,
                                             _QUINDICI_SUPERATO, _avverte, _clausole, approva, classe_domanda,
                                             riporta_avviso, valuta)
+from osservare_a_strati.impostazioni import NOMI_CORREZIONE, TITOLI, Impostazioni, attuali, con, imposta
+from osservare_a_strati.osservabilita import client as osservabilita_client
+from osservare_a_strati.osservabilita import log as osservabilita_log
+from osservare_a_strati.osservabilita import metriche, tracce
+from osservare_a_strati.osservabilita.client import cliente
+from osservare_a_strati.osservabilita.log import (CAMPI_RIGA, LOG, Righe, fai_log, logfmt, processore_otlp_log,
+                                                  url_log)
+from osservare_a_strati.osservabilita.metriche import (CONFINI_TOKEN, fai_metriche, leggi_metriche, memoria_metriche,
+                                                       metriche_in_dict, url_metriche)
+from osservare_a_strati.osservabilita.riassunto import ID_ACCOUNT, in_dict
+from osservare_a_strati.osservabilita.tracce import (EMAIL, VERSIONE, MascheraEmail, fai_provider, processore_otlp,
+                                                     senza_email, tracer)
 
 QUI = Path(__file__).parent
 load_dotenv(QUI / ".env")
 
-TITOLI = {0: "oggi: un log e una fattura", 1: "le metriche e l'SDK", 2: "gli agenti", 3: "lo strumento",
-          4: "i dati letti", 5: "il contenuto"}
-STRATO = 0
-
-EMAIL = re.compile(r"[\w.]+@[\w.]+\.\w+")
-MASCHERA = False
-PRODUZIONE = False  # il riassunto della richiesta sulla radice, per il cruscotto
-OTLP = None  # dove esportare gli span, oltre alla memoria
-
-# La versione del codice e del banco: il giorno del banco (tag banco-2026-11-05). Va nella Resource di span e log,
-# cosi' una run dal vivo finisce in Tempo e in Loki sotto il servizio e la versione giusti. Si cambia solo se cambia
-# qualcosa che il banco non ha misurato.
-VERSIONE = "2026-11-05"  # s1
-RISORSA = Resource.create({"service.name": "osservare-a-strati", "service.version": VERSIONE})  # s1
+_MODULI_DINAMICI = {
+    "memoria": (tracce, "memoria"),
+    "RISORSA": (tracce, "RISORSA"),
+    "memoria_log": (osservabilita_log, "memoria_log"),
+    "_handler": (osservabilita_log, "_handler"),
+    "_provider_log": (osservabilita_log, "_provider_log"),
+    "TOKEN_IN": (metriche, "TOKEN_IN"),
+    "TOKEN_OUT": (metriche, "TOKEN_OUT"),
+    "TOKEN_AGENTE": (metriche, "TOKEN_AGENTE"),
+    "provider": (metriche, "provider"),
+    "_provider_metriche": (metriche, "provider"),
+}
 
 
-class MascheraEmail(SpanProcessor):  # s5
-    """Toglie l'email da ogni attributo prima che lo span esca dal processo, anche dentro i JSON."""  # s5
-
-    def __init__(self, prossimo: SpanProcessor):  # s5
-        self.prossimo = prossimo  # s5
-
-    def on_start(self, span, parent_context=None):  # s5
-        self.prossimo.on_start(span, parent_context)  # s5
-
-    def on_end(self, span: ReadableSpan):  # s5
-        pulito = {k: senza_email(v) for k, v in span.attributes.items()}  # s5
-        self.prossimo.on_end(ReadableSpan(  # s5
-            name=span.name, context=span.context, parent=span.parent, resource=span.resource,  # s5
-            attributes=pulito, events=span.events, links=span.links, kind=span.kind, status=span.status,  # s5
-            start_time=span.start_time, end_time=span.end_time, instrumentation_scope=span.instrumentation_scope))  # s5
-
-    def shutdown(self):  # s5
-        self.prossimo.shutdown()  # s5
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:  # s5
-        return self.prossimo.force_flush(timeout_millis)  # s5
-
-
-def senza_email(v):  # s5
-    if isinstance(v, str):  # s5
-        return EMAIL.sub("[email]", v)  # s5
-    return tuple(senza_email(x) for x in v) if isinstance(v, (list, tuple)) else v  # s5
-
-
-LOG = logging.getLogger("osservare-a-strati")  # i log come li scrive gia' un team: codice applicativo
-LOG.setLevel(logging.INFO)
-memoria_log = InMemoryLogRecordExporter()  # rifatto da fai_log a ogni run
-_handler = None
-_provider_log = None
-
-
-def processore_otlp_log(url: str):
-    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-    return BatchLogRecordProcessor(OTLPLogExporter(endpoint=url))
-
-
-def url_log(url: str) -> str:
-    """Dove vanno i log via OTLP: lo stesso host degli span, path /v1/logs."""
-    return (url[:-len("/v1/traces")] if url.endswith("/v1/traces") else url.rstrip("/")) + "/v1/logs"
-
-
-def fai_log():
-    """Collega il logging di Python a OpenTelemetry: ogni riga esce col trace_id e lo span_id dello span corrente.
-    Un solo handler alla volta: quello della run precedente viene tolto."""
-    global _handler, _provider_log, memoria_log
-    if _handler:
-        LOG.removeHandler(_handler)
-        _handler = None
-    if _provider_log:  # chiude i processori della run precedente (con --otlp, il thread del batch)
-        _provider_log.shutdown()
-        _provider_log = None
-    memoria_log = InMemoryLogRecordExporter()  # uno per run (e per provider: shutdown() chiude l'exporter)
-    if STRATO < 3:
-        return
-    provider = LoggerProvider(resource=RISORSA)  # s3
-    _provider_log = provider
-    provider.add_log_record_processor(SimpleLogRecordProcessor(memoria_log))  # s3
-    if OTLP:
-        provider.add_log_record_processor(processore_otlp_log(url_log(OTLP)))
-    _handler = LoggingHandler(logger_provider=provider)  # s3
-    LOG.addHandler(_handler)  # s3
-
-
-# Le righe di log per chiamata (strato 0) portano l'id della richiesta e il conto della risposta. Le prende anche
-# l'impalcatura qui sotto, a ogni strato, per la stampa e per la registrazione: dallo strato 3 escono pure via OpenTelemetry.
-# I nomi del conto sono quelli delle convenzioni GenAI di OpenTelemetry, gli stessi che l'SDK scrive sugli span:
-# gen_ai.usage.input_tokens conta anche i token letti e scritti in cache. L'id della richiesta e' nostro.
-CAMPI_RIGA = ("richiesta", "gen_ai.agent.name", "gen_ai.response.model", "gen_ai.usage.input_tokens",
-              "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_write.input_tokens")
-
-
-class Righe(logging.Handler):
-    """Impalcatura della demo, non strumentazione: tiene le righe di log della run che portano l'id della richiesta."""
-
-    def __init__(self):
-        super().__init__(logging.INFO)
-        self.righe = []
-
-    def emit(self, record):
-        if hasattr(record, "richiesta"):
-            self.righe.append({"tempo": record.created, "livello": record.levelname, "testo": record.getMessage(),
-                               "campi": {k: getattr(record, k) for k in CAMPI_RIGA if hasattr(record, k)}})
-
-
-def logfmt(campi: dict) -> str:
-    return " ".join(f"{k}={v}" for k, v in campi.items())
-
-
-# Le metriche (strato 1): un provider per processo. La memoria legge in delta, quindi a ogni run solo il nuovo.
-memoria_metriche = InMemoryMetricReader(preferred_temporality={Counter: AggregationTemporality.DELTA,
-                                                               Histogram: AggregationTemporality.DELTA})
-_provider_metriche = None
-TOKEN_IN = TOKEN_OUT = TOKEN_AGENTE = None
-# I confini dell'istogramma: avvisi in una richiesta spende 17 mila token per volta che lavora (banco del 5/11),
-# quindi una, due o tre volte cadono in tre secchi diversi.
-CONFINI_TOKEN = [2_000, 5_000, 10_000, 20_000, 30_000, 40_000, 50_000, 60_000, 80_000, 100_000]
-
-
-def url_metriche(url: str) -> str:
-    """Dove vanno le metriche via OTLP: lo stesso host degli span, path /v1/metrics."""
-    return (url[:-len("/v1/traces")] if url.endswith("/v1/traces") else url.rstrip("/")) + "/v1/metrics"
-
-
-def fai_metriche():
-    """Il provider delle metriche e i tre strumenti dei token: due contatori per chiamata con i nomi delle convenzioni
-    GenAI, e un istogramma con un nome mio, un valore per agente a fine richiesta. Con --otlp escono ogni 5 secondi."""
-    global _provider_metriche, TOKEN_IN, TOKEN_OUT, TOKEN_AGENTE
-    if _provider_metriche:
-        return
-    lettori = [memoria_metriche]
-    if OTLP:
-        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-        lettori.append(PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=url_metriche(OTLP)),
-                                                     export_interval_millis=5000))
-    provider = MeterProvider(resource=RISORSA, metric_readers=lettori)  # s1
-    misura = provider.get_meter("osservare-a-strati")  # s1
-    TOKEN_IN = misura.create_counter("gen_ai.client.inference.usage.input_tokens", unit="{token}")  # s1
-    TOKEN_OUT = misura.create_counter("gen_ai.client.inference.usage.output_tokens", unit="{token}")  # s1
-    TOKEN_AGENTE = misura.create_histogram("assistente.agente.token", unit="{token}",  # s1
-                                           description="token di un agente in una richiesta",  # s1
-                                           explicit_bucket_boundaries_advisory=CONFINI_TOKEN)  # s1
-    _provider_metriche = provider
-
-
-def metriche_in_dict(dati) -> list[dict]:
-    """Le misure lette dalla memoria: una voce per serie, con le trace degli exemplar (dallo strato 2, la richiesta)."""
-    fuori = []
-    for rm in (dati.resource_metrics if dati else []):
-        for sm in rm.scope_metrics:
-            for m in sm.metrics:
-                for p in m.data.data_points:
-                    voce = {"nome": m.name, "attributi": dict(p.attributes or {})}
-                    if hasattr(p, "bucket_counts"):  # istogramma
-                        voce.update({"conteggio": p.count, "somma": p.sum})
-                    else:
-                        voce["valore"] = p.value
-                    voce["exemplar"] = sorted({format(e.trace_id, "032x") for e in (p.exemplars or []) if e.trace_id})
-                    fuori.append(voce)
-    return fuori
-
-
-def leggi_metriche() -> list[dict]:
-    """Quello che le metriche hanno misurato dall'ultima lettura: vuoto finché nessuno strato 1 ha creato il provider."""
-    return metriche_in_dict(memoria_metriche.get_metrics_data()) if _provider_metriche else []
-
-
-memoria = InMemorySpanExporter()  # s1  ponytail: in memoria; dal vivo un exporter OTLP verso un backend
-_spento = trace.NoOpTracer()
-
-
-def processore_otlp(url: str):
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    return BatchSpanProcessor(OTLPSpanExporter(endpoint=url))
-
-
-def fai_provider(maschera: bool) -> TracerProvider:
-    """Un provider per client: con la maschera, gli span passano da MascheraEmail prima dell'exporter."""
-    global _vero
-    provider = TracerProvider(resource=RISORSA)  # s1
-    processore = SimpleSpanProcessor(memoria)  # s1
-    if maschera:  # s5
-        processore = MascheraEmail(processore)  # s5
-    provider.add_span_processor(processore)  # s1
-    if PRODUZIONE:
-        from segnali import RiassuntoSullaRadice  # qui: segnali importa strati
-        provider.add_span_processor(RiassuntoSullaRadice(STRATO))
-    if OTLP:  # anche verso il backend l'email esce solo mascherata
-        provider.add_span_processor(MascheraEmail(processore_otlp(OTLP)) if maschera else processore_otlp(OTLP))
-    _vero = provider.get_tracer("osservare-a-strati")
-    return provider
-
-
-fai_provider(False)  # il tracer esiste anche prima del primo client
-
-
-def tracer(n: int):
-    """Il tracer dello strato n: vero da quello strato in su, muto sotto. Impalcatura della demo, non strumentazione."""
-    return _vero if STRATO >= n else _spento
+def __getattr__(nome):
+    """I nomi spostati restano leggibili da qui, sempre dal modulo che li possiede."""
+    if nome in _MODULI_DINAMICI:
+        modulo, campo = _MODULI_DINAMICI[nome]
+        return getattr(modulo, campo)
+    raise AttributeError(f"module {__name__!r} has no attribute {nome!r}")
 
 
 # Istruzioni come le scriverebbe un team: dicono cosa fa ciascuno, non come evitare la trappola.
@@ -311,7 +130,6 @@ DESCRIZIONI = {
 # 2 in piu' leggi_avvisi vuole la sala e restituisce solo gli avvisi di quella sala (include la 1);
 # 3 (dialogo) e' un'alternativa, non include la 1 ne' la 2: coordina e leggi_avvisi restano come nel guasto, ma
 # avvisi puo' chiedere a programma giorno, ora e sala di una sessione.
-CORREZIONE = 0
 CORREZIONE_COORDINA = " Quando conosci la sala della sessione, chiedi ad avvisi le comunicazioni su quella sala."
 CORREZIONE_AVVISI = " Lo strumento leggi_avvisi vuole la sala: usa quella indicata nella richiesta."
 CORREZIONE_DIALOGO = (" Se per capire quali avvisi riguardano la richiesta ti servono giorno, ora e sala di una sessione, "
@@ -334,7 +152,7 @@ def _sala_schema() -> dict:
 
 
 def schemi(correzione: int | None = None) -> dict:
-    sala = (CORREZIONE if correzione is None else correzione) == 2
+    sala = (attuali().correzione if correzione is None else correzione) == 2
     avvisi_tool = {"name": "leggi_avvisi", "input_schema": {"type": "object", "properties": {}},
                    "description": "Legge tutte le comunicazioni di oggi, tutte le pagine in una sola chiamata."}
     if sala:
@@ -354,7 +172,7 @@ def schemi(correzione: int | None = None) -> dict:
 
 def agenti_strumento(correzione: int | None = None) -> dict:
     """strumento -> (agente invocato, sue istruzioni, suoi strumenti)"""
-    corr = CORREZIONE if correzione is None else correzione
+    corr = attuali().correzione if correzione is None else correzione
     return {"programma": ("programma", ISTRUZIONI["programma"], ["leggi_programma", "sale"]),
             "sale": ("sale", ISTRUZIONI["sale"], ["leggi_sale"]),
             "avvisi": ("avvisi", ISTRUZIONI["avvisi"] + (CORREZIONE_AVVISI if corr == 2 else CORREZIONE_DIALOGO if corr == 3 else ""),
@@ -363,16 +181,13 @@ def agenti_strumento(correzione: int | None = None) -> dict:
 
 
 def istruzioni_coordina(correzione: int | None = None) -> str:
-    correzione = CORREZIONE if correzione is None else correzione
+    correzione = attuali().correzione if correzione is None else correzione
     return ISTRUZIONI["coordina"] + (CORREZIONE_COORDINA if correzione in (1, 2) else "")
 
 
 # Che versione del comportamento sta girando: la modalita' di correzione e un hash corto del testo che il modello legge
 # davvero (le istruzioni di ogni agente e le descrizioni e gli schemi degli strumenti, con la correzione applicata).
 # Stesso testo, stesso hash: cambia solo se cambia una parola di un'istruzione o di una descrizione.
-NOMI_CORREZIONE = ("nessuna", "istruzioni", "filtro", "dialogo")
-
-
 def versione_prompt(correzione: int | None = None) -> str:
     testo = json.dumps({"coordina": istruzioni_coordina(correzione), "agenti": agenti_strumento(correzione),
                         "strumenti": schemi(correzione)}, sort_keys=True, ensure_ascii=False)
@@ -381,7 +196,7 @@ def versione_prompt(correzione: int | None = None) -> str:
 
 def versione(correzione: int | None = None) -> dict:
     """Quello che la registrazione e lo span radice dicono sulla versione, per una modalita' di correzione."""
-    correzione = CORREZIONE if correzione is None else correzione
+    correzione = attuali().correzione if correzione is None else correzione
     return {"codice": VERSIONE, "correzione": NOMI_CORREZIONE[correzione], "prompt": versione_prompt(correzione)}
 
 
@@ -400,13 +215,13 @@ def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
     if nome == "leggi_programma":
         sessione = argomenti.get("sessione", "")
         LOG.info("leggi_programma: %s dal programma pubblicato il %s", sessione, PUBBLICATO)
-        if STRATO >= 4:  # s4
+        if attuali().strato >= 4:  # s4
             trace.get_current_span().set_attribute("programma.pubblicato_il", PUBBLICATO)  # s4
         return json.dumps(_trova(PROGRAMMA, sessione)[1], ensure_ascii=False)
     if nome == "leggi_sale":
         sessione = argomenti.get("sessione", "")
         LOG.info("leggi_sale: %s dal database delle sale", sessione)
-        if STRATO >= 4:  # s4
+        if attuali().strato >= 4:  # s4
             trace.get_current_span().set_attribute("sale.fonte", "database delle sale")  # s4
         k, dato = _trova(SESSIONE_SALA, sessione)
         return json.dumps(SALE[dato] if k else dato, ensure_ascii=False)
@@ -414,13 +229,13 @@ def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
         return json.dumps({"errore": f"strumento sconosciuto: {nome}"}, ensure_ascii=False)
     voci = [v for pagina in avvisi(stato["piena"]) for v in pagina]  # tutte le pagine, in una sola chiamata
     filtro = "nessuno"
-    if CORREZIONE == 2:
+    if attuali().correzione == 2:
         sala = sala_normale(argomenti.get("sala", ""))
         voci = [v for v in voci if v.startswith(f"Sala {sala}:")]
         filtro = f"sala {sala}"
     pagine = -(-len(voci) // AVVISI_PER_PAGINA)
     LOG.info("leggi_avvisi: %d pagine, %d avvisi, filtro %s", pagine, len(voci), filtro)
-    if STRATO >= 4:  # s4
+    if attuali().strato >= 4:  # s4
         trace.get_current_span().set_attributes({"avvisi.pagine": pagine, "avvisi.letti": len(voci),  # s4
                                                  "avvisi.filtro": filtro,  # s4
                                                  "avvisi.aggiornati_alle": AVVISI_AGGIORNATI})  # s4
@@ -473,18 +288,18 @@ def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti
                              "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s2
                              "gen_ai.agent.name": chiamante, "gen_ai.transfer.mode": "return_to_caller",  # s2
                              "gen_ai.transfer.target.name": destinazione})  # s2
-        if STRATO >= 3:  # s3  argomenti e risultato, come per gli strumenti dei dati
+        if attuali().strato >= 3:  # s3  argomenti e risultato, come per gli strumenti dei dati
             span.set_attribute("gen_ai.tool.call.arguments", json.dumps(argomenti, ensure_ascii=False))  # s3
         rifiuto = controlla_catena(destinazione, CATENA.get())
         if rifiuto:  # un errore vero del modello, che il codice non nasconde: lo vede lui e lo vede lo span
             span.set_status(StatusCode.ERROR, rifiuto)  # s2
             span.set_attribute("error.type", "ciclo")  # s2
-            if STRATO >= 3:  # s3
+            if attuali().strato >= 3:  # s3
                 span.set_attribute("gen_ai.tool.call.result", rifiuto)  # s3
             return rifiuto, True
         richiesta = richiesta_di_verifica(argomenti) if destinazione == "valida" else argomenti.get("richiesta", "")
         risultato = agente(client, destinazione, istruzioni, richiesta, stato, strumenti)
-        if STRATO >= 3:  # s3
+        if attuali().strato >= 3:  # s3
             span.set_attribute("gen_ai.tool.call.result", risultato)  # s3
         return risultato, False
 
@@ -519,13 +334,13 @@ def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strum
                                                "gen_ai.usage.cache_write.input_tokens": scritti})  # s0
         with stato["lock"]:  # i rami paralleli scrivono qui insieme
             stato["fattura"].append(r.usage)  # s0  quello che il provider conta e fattura
-        if STRATO >= 1:  # s1  le stesse cifre, come metriche
+        if attuali().strato >= 1:  # s1  le stesse cifre, come metriche
             attributi = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "anthropic",  # s1
                          "gen_ai.token.modality": "text", "gen_ai.request.model": MODEL,  # s1
                          "gen_ai.response.model": r.model, "gen_ai.agent.name": nome}  # s1
             ingresso = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)  # s1
-            TOKEN_IN.add(ingresso, attributi)  # s1
-            TOKEN_OUT.add(u.output_tokens, attributi)  # s1
+            metriche.TOKEN_IN.add(ingresso, attributi)  # s1
+            metriche.TOKEN_OUT.add(u.output_tokens, attributi)  # s1
             with stato["lock"]:  # s1
                 stato["per_agente"][nome] = stato["per_agente"].get(nome, 0) + ingresso + u.output_tokens  # s1
         chiamate = [b for b in r.content if b.type == "tool_use"]
@@ -549,35 +364,6 @@ def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, stru
         CATENA.reset(segno)
 
 
-def cliente(**prova):
-    if STRATO == 0:
-        fai_log()
-        return anthropic.Anthropic(open_telemetry=False, **prova)
-    fai_metriche()
-    provider = fai_provider(MASCHERA)
-    fai_log()
-    modo = "metadata_only"  # s1
-    if STRATO >= 5:  # s5
-        modo = "content"  # s5
-    return anthropic.Anthropic(open_telemetry={"tracer_provider": provider,  # s1
-                                               "traces": {"content_mode": modo}}, **prova)  # s1
-
-
-ID_ACCOUNT = ("anthropic.organization.id", "anthropic.workspace.id", "anthropic.request.id")
-
-
-def in_dict(s) -> dict:
-    attributi = {k: list(v) if isinstance(v, tuple) else v for k, v in s.attributes.items()}
-    for k in ID_ACCOUNT:  # gli id dell'account non finiscono ne' a schermo ne' nelle registrazioni
-        if k in attributi:
-            attributi[k] = "oscurato"
-    return {"nome": s.name, "id": format(s.context.span_id, "016x"),
-            "padre": format(s.parent.span_id, "016x") if s.parent else None,
-            "trace": format(s.context.trace_id, "032x"),
-            "inizio": s.start_time / 1e9, "fine": s.end_time / 1e9,
-            "errore": s.status.status_code == StatusCode.ERROR, "attributi": attributi}
-
-
 def log_in_dict(r) -> dict:
     """Un record di log con il contesto che l'handler gli ha messo: trace e span dello span corrente, e i campi della
     riga per chiamata se ci sono."""
@@ -589,7 +375,7 @@ def log_in_dict(r) -> dict:
 
 
 def esegui(guasto: bool, cartella: Path, client=None) -> dict:
-    memoria.clear()
+    tracce.memoria.clear()
     client = client or cliente()
     stato = {"piena": guasto, "fattura": [], "per_agente": {}, "lock": threading.Lock()}
     stato["richiesta"] = uuid.uuid4().hex[:8]  # s0  lo stesso id su ogni riga di log della richiesta, per ritrovarle insieme
@@ -601,28 +387,28 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
         with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
             span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
             span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
-            span.set_attributes({"richiesta.correzione": NOMI_CORREZIONE[CORREZIONE],  # s2
+            span.set_attributes({"richiesta.correzione": NOMI_CORREZIONE[attuali().correzione],  # s2
                                  "richiesta.versione_prompt": versione_prompt()})  # s2
-            if PRODUZIONE:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
+            if attuali().produzione:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
                 span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
             # coordina decide chi chiamare, in che ordine e cosa passare
             risposta = agente(client, "coordina", istruzioni_coordina(), DOMANDA, stato, ["programma", "sale", "avvisi", "valida"])
-            if STRATO >= 1:  # s1  a fine richiesta, un valore per agente; dallo strato 2 porta la trace come exemplar
+            if attuali().strato >= 1:  # s1  a fine richiesta, un valore per agente; dallo strato 2 porta la trace come exemplar
                 for nome, n in stato["per_agente"].items():  # s1
-                    TOKEN_AGENTE.record(n, {"gen_ai.agent.name": nome})  # s1
+                    metriche.TOKEN_AGENTE.record(n, {"gen_ai.agent.name": nome})  # s1
     finally:
         LOG.removeHandler(righe)
     secondi = time.monotonic() - inizio  # s0
     ora = dt.datetime.now()
     u = stato["fattura"]
-    reg = {"strato": STRATO, "correzione": CORREZIONE, "maschera": MASCHERA, "registrata": ora.isoformat(timespec="seconds"),
+    reg = {"strato": attuali().strato, "correzione": attuali().correzione, "maschera": attuali().maschera, "registrata": ora.isoformat(timespec="seconds"),
            "modo": "guasto" if guasto else "sana", "versione": versione(), "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
            "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
            "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
                        "cache": sum(x.cache_read_input_tokens or 0 for x in u),  # s0
                        "out": sum(x.output_tokens for x in u)},  # s0
-           "secondi": secondi, "span": [in_dict(s) for s in memoria.get_finished_spans()],
-           "log_otel": [log_in_dict(r) for r in memoria_log.get_finished_logs()],
+           "secondi": secondi, "span": [in_dict(s) for s in tracce.memoria.get_finished_spans()],
+           "log_otel": [log_in_dict(r) for r in osservabilita_log.memoria_log.get_finished_logs()],
            "richiesta": stato["richiesta"], "righe": righe.righe, "metriche": leggi_metriche()}
     cartella.mkdir(parents=True, exist_ok=True)
     (cartella / f"{ora:%Y%m%d-%H%M%S}-{reg['modo']}.json").write_text(json.dumps(reg, ensure_ascii=False, indent=1))
@@ -1375,9 +1161,17 @@ def mostra_schema(cartella: Path, modo: str | None = None, senza_strumenti: bool
     print("\n```mermaid\n" + mermaid + "\n```")
 
 
+FILE_CON_MARCATORI = (tracce.__file__, osservabilita_log.__file__, metriche.__file__, osservabilita_client.__file__,
+                      __file__)
+
+
+def _righe_di(percorso: str) -> list[str]:
+    return Path(percorso).read_text().splitlines()
+
+
 def righe():
     """Le righe di codice di ogni strato, contate dai marcatori sN dopo il cancelletto."""
-    testo = Path(__file__).read_text().splitlines()
+    testo = [r for percorso in FILE_CON_MARCATORI for r in _righe_di(percorso)]
     for n in range(6):
         marcate = [r for r in testo if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith("#")]
         print(f"strato {n} · {TITOLI[n]:<28} {len(marcate):>3} righe")
@@ -1385,25 +1179,27 @@ def righe():
 
 def codice(n: int) -> str:
     """Le righe dello strato n come si scriverebbero senza l'impalcatura della demo, per le slide."""
-    testo = Path(__file__).read_text().splitlines()
-    marcate = [i for i, r in enumerate(testo) if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith("#")]
-    blocchi, fuori = [], []
-    for i in marcate:
-        if blocchi and not "".join(testo[blocchi[-1][-1] + 1:i]).strip():  # in mezzo solo righe vuote
-            blocchi[-1].extend(range(blocchi[-1][-1] + 1, i + 1))
-        else:
-            blocchi.append([i])
-    for blocco in blocchi:
-        righe_, rientro_if = [], None
-        for i in blocco:
-            r = re.sub(rf"\s+#\s*s{n}\b.*$", "", testo[i]).replace(f"tracer({n}).", "tracer.").replace(", **prova)", ")")
-            if re.match(rf"\s*if STRATO >= {n}:", r):
-                rientro_if = len(r) - len(r.lstrip())
-                continue
-            if rientro_if is not None and len(r) - len(r.lstrip()) > rientro_if:
-                r = r[4:]
-            righe_.append(r)
-        fuori.append(textwrap.dedent("\n".join(righe_)))
+    fuori = []
+    for percorso in FILE_CON_MARCATORI:
+        testo = _righe_di(percorso)
+        marcate = [i for i, r in enumerate(testo) if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith("#")]
+        blocchi = []
+        for i in marcate:
+            if blocchi and not "".join(testo[blocchi[-1][-1] + 1:i]).strip():  # in mezzo solo righe vuote
+                blocchi[-1].extend(range(blocchi[-1][-1] + 1, i + 1))
+            else:
+                blocchi.append([i])
+        for blocco in blocchi:
+            righe_, rientro_if = [], None
+            for i in blocco:
+                r = re.sub(rf"\s+#\s*s{n}\b.*$", "", testo[i]).replace(f"tracer({n}).", "tracer.").replace(", **prova)", ")")
+                if re.match(rf"\s*if attuali\(\)\.strato >= {n}:", r):
+                    rientro_if = len(r) - len(r.lstrip())
+                    continue
+                if rientro_if is not None and len(r) - len(r.lstrip()) > rientro_if:
+                    r = r[4:]
+                righe_.append(r)
+            fuori.append(textwrap.dedent("\n".join(righe_)))
     return "\n...\n".join(fuori)
 
 
@@ -1416,16 +1212,16 @@ if __name__ == "__main__":
     p.add_argument("--correzione-dialogo", action="store_true", help="avvisi puo' chiedere a programma giorno, ora e sala (alternativa alle altre due)")
     p.add_argument("--maschera", action="store_true", help="solo con --strato 5: l'email non esce dagli span")
     p.add_argument("--produzione", action="store_true", help="dallo strato 2: il riassunto della richiesta sulla radice")
-    p.add_argument("--otlp", metavar="URL", help="esporta gli span via OTLP HTTP (implica --produzione)")
+    p.add_argument("--otlp", metavar="URL", help="esporta gli span via HTTP (implica --produzione)")
     p.add_argument("--banco", type=int, default=0)
     p.add_argument("--replay")
     p.add_argument("--riepilogo", action="store_true")
-    p.add_argument("--misure", type=int, metavar="STRATO", help="le misure della giornata piena e della tranquilla in uno strato")
+    p.add_argument("--misure", type=int, metavar="N", help="le misure della giornata piena e della tranquilla in uno strato")
     p.add_argument("--schema", metavar="CARTELLA", help="il grafo delle chiamate fra agenti sulle registrazioni (strato 2+), in testo e Mermaid")
     p.add_argument("--modo", choices=("guasto", "sana"), help="con --schema: solo le run di quel modo")
     p.add_argument("--senza-strumenti", action="store_true", help="con --schema: nascondi gli strumenti dei dati (leggi_*)")
     p.add_argument("--righe", action="store_true")
-    p.add_argument("--codice", type=int, choices=range(6), metavar="STRATO", help="le righe di uno strato, pulite per le slide")
+    p.add_argument("--codice", type=int, choices=range(6), metavar="N", help="le righe di uno strato, pulite per le slide")
     a = p.parse_args()
     if a.schema:
         mostra_schema(Path(a.schema), a.modo, a.senza_strumenti)
@@ -1442,13 +1238,14 @@ if __name__ == "__main__":
     else:
         if a.maschera and a.strato != 5:
             raise SystemExit("--maschera serve allo strato 5, dove il contenuto entra negli span")
-        PRODUZIONE, OTLP = a.produzione or bool(a.otlp), a.otlp
-        if PRODUZIONE and a.strato < 2:
+        produzione, otlp = a.produzione or bool(a.otlp), a.otlp
+        if produzione and a.strato < 2:
             raise SystemExit("--produzione serve dallo strato 2, dove c'e' la radice della richiesta")
-        STRATO, MASCHERA = a.strato, a.maschera
-        CORREZIONE = 3 if a.correzione_dialogo else 2 if a.correzione_completa else 1 if a.correzione else 0
-        a.guasto = a.guasto or CORREZIONE > 0  # la correzione ha senso solo nella giornata piena
-        coda = ["", "-correzione", "-correzione-completa", "-correzione-dialogo"][CORREZIONE] + ("-maschera" if MASCHERA else "") + ("-produzione" if PRODUZIONE else "")
+        maschera = a.maschera
+        correzione = 3 if a.correzione_dialogo else 2 if a.correzione_completa else 1 if a.correzione else 0
+        a.guasto = a.guasto or correzione > 0  # la correzione ha senso solo nella giornata piena
+        coda = ["", "-correzione", "-correzione-completa", "-correzione-dialogo"][correzione] + ("-maschera" if maschera else "") + ("-produzione" if produzione else "")
+        imposta(Impostazioni(strato=a.strato, correzione=correzione, maschera=maschera, produzione=produzione, otlp=otlp))
         cartella = QUI / "registrazioni" / f"strato-{a.strato}{coda}"
         if a.banco:
             concludi_banco(a.banco, *esegui_banco(a.banco, a.guasto, cartella))
