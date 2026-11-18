@@ -103,13 +103,13 @@ def misura(r: dict, mappa: dict, cartella: str):
     for ch in strati.chiamate_dagli_span(r["span"]):
         k = ch["campi"]
         attributi = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "anthropic", "gen_ai.token.modality": "text",
-                     "gen_ai.request.model": strati.MODEL, "gen_ai.response.model": k["modello"],
+                     "gen_ai.request.model": strati.MODEL, "gen_ai.response.model": k["gen_ai.response.model"],
                      "gen_ai.agent.name": ch["agente"], **banco}
-        ingresso = k["input_tokens"] + k["cache_read_input_tokens"] + k["cache_creation_input_tokens"]
+        ingresso = k["gen_ai.usage.input_tokens"]  # con la cache dentro, come nelle convenzioni
         contesto = contesto_di(mappa, ch["trace"], ch["span"])
         strati.TOKEN_IN.add(ingresso, attributi, context=contesto)
-        strati.TOKEN_OUT.add(k["output_tokens"], attributi, context=contesto)
-        per_agente[ch["agente"]] = per_agente.get(ch["agente"], 0) + ingresso + k["output_tokens"]
+        strati.TOKEN_OUT.add(k["gen_ai.usage.output_tokens"], attributi, context=contesto)
+        per_agente[ch["agente"]] = per_agente.get(ch["agente"], 0) + ingresso + k["gen_ai.usage.output_tokens"]
     radice = next((x for x in r["span"] if x["nome"].startswith("invoke_workflow")), None)
     contesto = contesto_di(mappa, radice["trace"], radice["id"]) if radice else None
     for agente, n in per_agente.items():

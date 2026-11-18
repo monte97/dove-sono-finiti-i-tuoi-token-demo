@@ -149,12 +149,13 @@ def test_strato_0_una_riga_di_log_per_chiamata():
     reg, fuori = corri(0)
     assert len(reg["righe"]) == CHIAMATE and reg["metriche"] == [] and reg["log_otel"] == []
     assert {r["campi"]["richiesta"] for r in reg["righe"]} == {reg["richiesta"]}  # lo stesso id su ogni riga
-    agenti = [r["campi"]["agente"] for r in reg["righe"]]
+    agenti = [r["campi"]["gen_ai.agent.name"] for r in reg["righe"]]
     assert {a: agenti.count(a) for a in set(agenti)} == {"coordina": 3, "programma": 2, "sale": 2, "avvisi": 2, "valida": 1}
     r = reg["righe"][0]["campi"]  # i nomi dei campi del conto, come li manda il provider
-    assert (r["input_tokens"], r["output_tokens"], r["cache_read_input_tokens"], r["cache_creation_input_tokens"]) == (1000, 50, 0, 0)
-    assert r["modello"] == s.MODEL and reg["righe"][0]["testo"] == "chiamata al modello"
-    assert "chiamata al modello" in fuori and f"richiesta={reg['richiesta']}" in fuori and "input_tokens=1000" in fuori
+    assert (r["gen_ai.usage.input_tokens"], r["gen_ai.usage.output_tokens"], r["gen_ai.usage.cache_read.input_tokens"],
+            r["gen_ai.usage.cache_write.input_tokens"]) == (1000, 50, 0, 0)
+    assert r["gen_ai.response.model"] == s.MODEL and reg["righe"][0]["testo"] == "chiamata al modello"
+    assert "chiamata al modello" in fuori and f"richiesta={reg['richiesta']}" in fuori and "gen_ai.usage.input_tokens=1000" in fuori
     assert 'LOG.info("chiamata al modello"' in s.codice(0) and "uuid.uuid4()" in s.codice(0)
     assert s.LOG.handlers == []  # l'impalcatura che tiene le righe esce con la run
     assert corri(0)[0]["richiesta"] != reg["richiesta"]  # un id per richiesta
@@ -236,8 +237,8 @@ def test_strato_3_log_correlati_agli_span_degli_strumenti():
     assert len(dei_dati) == 3 and len(per_chiamata) == CHIAMATE
     assert all(r["trace"] == traccia and r["livello"] == "INFO" for r in reg["log_otel"])
     agente_dello_span = {x["id"]: x["attributi"]["gen_ai.agent.name"] for x in reg["span"] if x["nome"].startswith("invoke_agent")}
-    assert all(agente_dello_span[r["span"]] == r["campi"]["agente"] for r in per_chiamata)  # dentro l'invoke_agent di chi chiama
-    assert "chiamata al modello agente=avvisi input_tokens=1000" in fuori and "[invoke_agent avvisi]" in fuori
+    assert all(agente_dello_span[r["span"]] == r["campi"]["gen_ai.agent.name"] for r in per_chiamata)  # dentro l'invoke_agent di chi chiama
+    assert "chiamata al modello gen_ai.agent.name=avvisi gen_ai.usage.input_tokens=1000" in fuori and "[invoke_agent avvisi]" in fuori
     per_testo = {r["testo"].split(":")[0]: r for r in dei_dati}  # scritti da thread diversi, ordine libero
     for nome, r in per_testo.items():
         assert r["span"] == id_span[nome] and len(r["span"]) == 16 and len(r["trace"]) == 32
@@ -255,7 +256,8 @@ def test_strato_3_log_correlati_agli_span_degli_strumenti():
 def test_chiamate_dagli_span_come_le_righe_dal_vivo():
     reg, _ = corri(3)
     dagli_span = s.chiamate_dagli_span(reg["span"])
-    chiave = lambda campi: (campi["agente"], campi["input_tokens"], campi["output_tokens"], campi["cache_read_input_tokens"])
+    chiave = lambda campi: (campi["gen_ai.agent.name"], campi["gen_ai.usage.input_tokens"], campi["gen_ai.usage.output_tokens"],
+                           campi["gen_ai.usage.cache_read.input_tokens"])
     assert sorted(chiave(c["campi"]) for c in dagli_span) == sorted(chiave(r["campi"]) for r in reg["righe"])
     assert sorted(c["span"] for c in dagli_span) == sorted(r["span"] for r in reg["log_otel"] if "campi" in r)
     assert s.chiamate_dagli_span(corri(1)[0]["span"]) == []  # allo strato 1 l'agente non si sa

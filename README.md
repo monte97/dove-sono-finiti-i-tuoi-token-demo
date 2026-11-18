@@ -49,7 +49,7 @@ approva. Nessuno ha sbagliato, e i token in ingresso stanno quasi tutti in `avvi
 
 | strato | cosa si accende |
 |---|---|
-| 0 | oggi: una riga di log per ogni chiamata al modello, con l'agente, il conto della risposta (`input_tokens`, `output_tokens`, cache) e un id della richiesta, e la fattura (la somma dell'usage); niente OpenTelemetry |
+| 0 | oggi: una riga di log per ogni chiamata al modello, con l'agente e il conto della risposta nei nomi delle convenzioni GenAI (`gen_ai.agent.name`, `gen_ai.usage.input_tokens` con la cache dentro, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`) e un id della richiesta, nostro, e la fattura (la somma dell'usage); niente OpenTelemetry |
 | 1 | le metriche dei token e l'SDK: due contatori per chiamata con i nomi delle convenzioni GenAI (`gen_ai.client.inference.usage.input_tokens` e `output_tokens`, più `gen_ai.agent.name`), un istogramma mio (`assistente.agente.token`, un valore per agente a fine richiesta) e la strumentazione nativa di Anthropic (`open_telemetry=`) |
 | 2 | gli agenti: gli span `invoke_workflow`, `invoke_agent` e gli archi fra agenti, scritti a mano, con il contesto propagato ai thread dei rami paralleli |
 | 3 | lo strumento: lo span `execute_tool` con argomenti e risultato, più i log correlati: le righe di `logging` dello strumento escono con `trace_id` e `span_id` |
@@ -71,7 +71,7 @@ richiesta si ritrova dal suo id e si somma per agente:
 
 ```logql
 {service_name="osservare-a-strati"} | richiesta="7923fcc3"
-sum by (agente) (sum_over_time({service_name="osservare-a-strati"} | richiesta="7923fcc3" | unwrap input_tokens [1h]))
+sum by (gen_ai_agent_name) (sum_over_time({service_name="osservare-a-strati"} | richiesta="7923fcc3" | unwrap gen_ai_usage_input_tokens [1h]))
 ```
 
 L'istogramma `assistente.agente.token` si registra dentro lo span della richiesta: dallo strato 2 ogni misura porta la

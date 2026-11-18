@@ -151,8 +151,10 @@ def fai_log():
 
 # Le righe di log per chiamata (strato 0) portano l'id della richiesta e il conto della risposta. Le prende anche
 # l'impalcatura qui sotto, a ogni strato, per la stampa e per la registrazione: dallo strato 3 escono pure via OpenTelemetry.
-CAMPI_RIGA = ("richiesta", "agente", "modello", "input_tokens", "output_tokens", "cache_read_input_tokens",
-              "cache_creation_input_tokens")
+# I nomi del conto sono quelli delle convenzioni GenAI di OpenTelemetry, gli stessi che l'SDK scrive sugli span:
+# gen_ai.usage.input_tokens conta anche i token letti e scritti in cache. L'id della richiesta e' nostro.
+CAMPI_RIGA = ("richiesta", "gen_ai.agent.name", "gen_ai.response.model", "gen_ai.usage.input_tokens",
+              "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_write.input_tokens")
 
 
 class Righe(logging.Handler):
@@ -694,10 +696,14 @@ def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strum
         r = client.messages.create(model=MODEL, max_tokens=4096, system=istruzioni, messages=messaggi,
                                    thinking=PENSIERO, **extra)
         u = r.usage  # s0  il conto di questa chiamata: arriva con la risposta
-        LOG.info("chiamata al modello", extra={"richiesta": stato["richiesta"], "agente": nome, "modello": r.model,  # s0
-                                               "input_tokens": u.input_tokens, "output_tokens": u.output_tokens,  # s0
-                                               "cache_read_input_tokens": u.cache_read_input_tokens or 0,  # s0
-                                               "cache_creation_input_tokens": u.cache_creation_input_tokens or 0})  # s0
+        letti, scritti = u.cache_read_input_tokens or 0, u.cache_creation_input_tokens or 0  # s0
+        LOG.info("chiamata al modello", extra={"richiesta": stato["richiesta"],  # s0
+                                               "gen_ai.agent.name": nome,  # s0
+                                               "gen_ai.response.model": r.model,  # s0
+                                               "gen_ai.usage.input_tokens": u.input_tokens + letti + scritti,  # s0
+                                               "gen_ai.usage.output_tokens": u.output_tokens,  # s0
+                                               "gen_ai.usage.cache_read.input_tokens": letti,  # s0
+                                               "gen_ai.usage.cache_write.input_tokens": scritti})  # s0
         with stato["lock"]:  # i rami paralleli scrivono qui insieme
             stato["fattura"].append(r.usage)  # s0  quello che il provider conta e fattura
         if STRATO >= 1:  # s1  le stesse cifre, come metriche
@@ -980,7 +986,7 @@ def mostra(reg: dict, registrata: bool = False):
         print(c("grigio", "\nlog con contesto:"))
         nomi_span = {s["id"]: s["nome"] for s in span}
         for r in reg["log_otel"]:
-            campi = {k: v for k, v in r.get("campi", {}).items() if k not in ("richiesta", "modello")}
+            campi = {k: v for k, v in r.get("campi", {}).items() if k not in ("richiesta", "gen_ai.response.model")}
             print(f"  {r['livello']:<5} {r['testo']}" + (c("grigio", " " + logfmt(campi)) if campi else "")
                   + c("grigio", f"  [{nomi_span.get(r['span'], '?')}]"))
     tracce = per_trace(span)
@@ -1309,9 +1315,11 @@ def chiamate_dagli_span(span) -> list[dict]:
             continue
         scritti = attr(x, "gen_ai.usage.cache_write.input_tokens") or 0
         fuori.append({"agente": attr(y, "gen_ai.agent.name"), "span": y["id"], "trace": x["trace"], "fine": x["fine"],
-                      "campi": {"agente": attr(y, "gen_ai.agent.name"), "modello": attr(x, "gen_ai.response.model", MODEL),
-                                "input_tokens": t["in"] - t["cache"] - scritti, "output_tokens": t["out"],
-                                "cache_read_input_tokens": t["cache"], "cache_creation_input_tokens": scritti}})
+                      "campi": {"gen_ai.agent.name": attr(y, "gen_ai.agent.name"),
+                                "gen_ai.response.model": attr(x, "gen_ai.response.model", MODEL),
+                                "gen_ai.usage.input_tokens": t["in"], "gen_ai.usage.output_tokens": t["out"],
+                                "gen_ai.usage.cache_read.input_tokens": t["cache"],
+                                "gen_ai.usage.cache_write.input_tokens": scritti}})
     return fuori
 
 
