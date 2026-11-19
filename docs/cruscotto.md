@@ -53,7 +53,7 @@ Servono una chiave Anthropic e un po' di spesa. Il costo reale di ogni run è ne
 registrazione, e `strati riepilogo` stampa la somma. Per tutto il banco il tetto indicativo è 5 $.
 
 ```bash
-python3.14 -m venv .venv && .venv/bin/pip install -e .
+python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt -e .
 echo "ANTHROPIC_API_KEY=..." > .env
 strati run --strato 3 --guasto                      # una run, stampata come il replay
 strati banco 10 --strato 5 --guasto                 # dieci run, una riga ciascuna

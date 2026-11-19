@@ -24,7 +24,7 @@ Le run si rigiocano senza chiamare l'API: il replay mostra solo quello che lo st
 
 ```bash
 python3.14 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -r requirements.txt -e .    # versioni bloccate in requirements.txt
 source .venv/bin/activate
 strati replay registrazioni/strato-5/20261105-202614-guasto.json    # la richiesta di Giulia mostrata nel talk
 ```
@@ -83,7 +83,7 @@ Ogni strato contiene i precedenti. Le righe che esistono solo per osservare fini
 | `strati righe`, `strati codice N` | conteggio e codice per le slide |
 | `strati controllo stima`, `run`, `confronta` | il banco breve della settimana del talk |
 | `strati cruscotto invia`, `verifica` | manda le registrazioni e controlla il cruscotto |
-| `pytest -q` | i test, senza rete e sul server finto |
+| `pytest -q` | i test, senza rete e sul server finto (prima `pip install -e '.[dev]'`) |
 
 ## Dove leggere il resto
 

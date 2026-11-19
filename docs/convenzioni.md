@@ -41,6 +41,7 @@ ricontrolli di `valida` e il dialogo.
 ## Test
 
 ```bash
+pip install -e '.[dev]'   # pytest e ruff
 pytest -q    # controlli senza rete, contro un server finto; segnali, cruscotto e rimando a Tempo
 ruff check .  # lint; il formatter non si usa, perche' spezzerebbe le righe marcate # sN
 ```
