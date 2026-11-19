@@ -2,21 +2,8 @@
 import threading
 
 from opentelemetry.sdk.trace import SpanProcessor
-from opentelemetry.trace import StatusCode
 
-ID_ACCOUNT = ("anthropic.organization.id", "anthropic.workspace.id", "anthropic.request.id")
-
-
-def in_dict(s) -> dict:
-    attributi = {k: list(v) if isinstance(v, tuple) else v for k, v in s.attributes.items()}
-    for k in ID_ACCOUNT:  # gli id dell'account non finiscono ne' a schermo ne' nelle registrazioni
-        if k in attributi:
-            attributi[k] = "oscurato"
-    return {"nome": s.name, "id": format(s.context.span_id, "016x"),
-            "padre": format(s.parent.span_id, "016x") if s.parent else None,
-            "trace": format(s.context.trace_id, "032x"),
-            "inizio": s.start_time / 1e9, "fine": s.end_time / 1e9,
-            "errore": s.status.status_code == StatusCode.ERROR, "attributi": attributi}
+from ..registrazioni import ID_ACCOUNT, in_dict  # noqa: F401
 
 
 class RiassuntoSullaRadice(SpanProcessor):

@@ -13,6 +13,7 @@ import server_finto as sf
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from server_finto import *  # noqa: F401,F403
+from osservare_a_strati import esecuzione
 from osservare_a_strati.impostazioni import con
 
 def test_replay_registrazione_dello_spike():
@@ -46,18 +47,18 @@ def test_banco_continua_dopo_una_run_fallita():
         client = s.cliente(api_key="finta", max_retries=0, http_client=httpx.Client(transport=httpx.MockTransport(server)))
         errori = io.StringIO()
         with contextlib.redirect_stderr(errori):
-            orig = s.esegui
+            orig = esecuzione.esegui
 
             def una_volta(guasto, cartella, client=None):
                 try:
                     return orig(guasto, cartella, client)
                 finally:
                     sbagliare.clear()  # la prima run fallisce, le altre vanno
-            s.esegui = una_volta
+            esecuzione.esegui = una_volta
             try:
                 riuscite, fallite = s.esegui_banco(3, True, CARTELLA, client)
             finally:
-                s.esegui = orig
+                esecuzione.esegui = orig
     assert fallite == 1 and len(riuscite) == 2
     assert "run 1 fallita" in errori.getvalue() and "guasto finto" in errori.getvalue()
     # a fine banco, con una run fallita, il processo esce con stato 1; senza fallite, no

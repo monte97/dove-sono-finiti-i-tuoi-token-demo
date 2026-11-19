@@ -13,6 +13,7 @@ import server_finto as sf
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from server_finto import *  # noqa: F401,F403
+from osservare_a_strati.agenti import ciclo
 from osservare_a_strati.impostazioni import con
 
 def test_strato_3_gli_strumenti_con_argomenti_e_risultato():
@@ -97,12 +98,12 @@ def test_risultati_nell_ordine_dei_tool_use():
         fine.append(nome)
         return nome.upper(), False
 
-    vero, s.esegui_strumento = s.esegui_strumento, lento
+    vero, ciclo.esegui_strumento = ciclo.esegui_strumento, lento
     try:
         chiamate = [type("C", (), {"name": n, "id": n, "input": {}})() for n in "abc"]
         assert s.esegui_chiamate(None, "x", chiamate, {}) == [("A", False), ("B", False), ("C", False)]
     finally:
-        s.esegui_strumento = vero
+        ciclo.esegui_strumento = vero
     assert fine == ["c", "b", "a"]
 
 
@@ -112,7 +113,7 @@ def test_eccezione_di_un_ramo_risale():
             raise ValueError("ramo b")
         return nome, False
 
-    vero, s.esegui_strumento = s.esegui_strumento, rotto
+    vero, ciclo.esegui_strumento = ciclo.esegui_strumento, rotto
     try:
         chiamate = [type("C", (), {"name": n, "id": n, "input": {}})() for n in "abc"]
         try:
@@ -122,7 +123,7 @@ def test_eccezione_di_un_ramo_risale():
         else:
             raise AssertionError("l'eccezione e' sparita")
     finally:
-        s.esegui_strumento = vero
+        ciclo.esegui_strumento = vero
 
 
 def test_trova_con_chiave_vuota_non_trova_niente():

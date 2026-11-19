@@ -14,6 +14,7 @@ from opentelemetry import trace
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.trace import TracerProvider
 from server_finto import *  # noqa: F401,F403
+from osservare_a_strati.agenti import prompt as p
 from osservare_a_strati.impostazioni import con
 from osservare_a_strati.osservabilita import log as oslog
 from osservare_a_strati.osservabilita import tracce
@@ -224,19 +225,19 @@ def test_versione_prompt_stabile_e_per_modalita():
 
 def test_versione_prompt_cambia_se_cambia_un_testo():
     base = s.versione_prompt(0)
-    for chiave, dove in (("coordina", s.ISTRUZIONI), ("avvisi", s.ISTRUZIONI), ("avvisi", s.DESCRIZIONI)):
+    for chiave, dove in (("coordina", p.ISTRUZIONI), ("avvisi", p.ISTRUZIONI), ("avvisi", p.DESCRIZIONI)):
         prima = dove[chiave]
         dove[chiave] = prima + " "
         try:
-            assert s.versione_prompt(0) != base, (chiave, dove is s.ISTRUZIONI)
+            assert s.versione_prompt(0) != base, (chiave, dove is p.ISTRUZIONI)
         finally:
             dove[chiave] = prima
-    prima = s.CORREZIONE_COORDINA  # una frase di correzione cambia solo le modalita' che la usano
-    s.CORREZIONE_COORDINA = prima + "!"
+    prima = p.CORREZIONE_COORDINA  # una frase di correzione cambia solo le modalita' che la usano
+    p.CORREZIONE_COORDINA = prima + "!"
     try:
         assert s.versione_prompt(0) == base and s.versione_prompt(1) != HASH_BANCO[1] and s.versione_prompt(3) == HASH_BANCO[3]
     finally:
-        s.CORREZIONE_COORDINA = prima
+        p.CORREZIONE_COORDINA = prima
     assert s.versione_prompt(0) == base
 
 

@@ -2,6 +2,7 @@
 import server_finto as sf
 from server_finto import *  # noqa: F401,F403
 
+from osservare_a_strati.esecuzione import concludi_banco, esegui, esegui_banco  # noqa: F401
 from osservare_a_strati.impostazioni import con
 
 

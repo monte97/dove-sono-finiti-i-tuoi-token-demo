@@ -31,23 +31,23 @@ La pipeline fissa, la variante A (agente come strumento) e il tool runner sono n
 """
 
 import argparse
-import contextvars  # s2
 import datetime as dt
-import hashlib
 import json
 import re
 import statistics
-import sys
 import textwrap
-import threading
-import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv
-from opentelemetry import trace
-from opentelemetry.trace import StatusCode
+from osservare_a_strati import esecuzione as esecuzione_mod, registrazioni as registrazioni_mod
+from osservare_a_strati.agenti import ciclo as ciclo_mod, prompt as prompt_mod, strumenti as strumenti_mod
+from osservare_a_strati.agenti.ciclo import (CATENA, PROFONDITA_MAX, agente, chiama_agente, ciclo, controlla_catena,
+                                             esegui_chiamate, esegui_strumento, richiesta_di_verifica)
+from osservare_a_strati.agenti.prompt import (CORREZIONE_AVVISI, CORREZIONE_COORDINA, CORREZIONE_DIALOGO,
+                                              DESCRIZIONI, ISTRUZIONI, agenti_strumento, istruzioni_coordina, schemi,
+                                              versione, versione_prompt)
+from osservare_a_strati.agenti.strumenti import leggi_dato
+from osservare_a_strati.esecuzione import concludi_banco, esegui, esegui_banco
 from osservare_a_strati.evento.avvisi import (AVVISO_ALLARME, AVVISO_CHIAVE, AVVISI_PER_PAGINA, PAGINA_AVVISO,
                                               PAGINE_PIENA, PAGINE_TRANQUILLA, SEME_AVVISI, _MODELLI, _ORE, _voce, avvisi)
 from osservare_a_strati.evento.dati import (AVVISI_AGGIORNATI, DOMANDA, PROGRAMMA, PUBBLICATO, SALE, SESSIONE_SALA,
@@ -66,9 +66,9 @@ from osservare_a_strati.osservabilita.log import (CAMPI_RIGA, LOG, Righe, fai_lo
                                                   url_log)
 from osservare_a_strati.osservabilita.metriche import (CONFINI_TOKEN, fai_metriche, leggi_metriche, memoria_metriche,
                                                        metriche_in_dict, url_metriche)
-from osservare_a_strati.osservabilita.riassunto import ID_ACCOUNT, in_dict
 from osservare_a_strati.osservabilita.tracce import (EMAIL, VERSIONE, MascheraEmail, fai_provider, processore_otlp,
-                                                     senza_email, tracer)
+                                                     senza_email)
+from osservare_a_strati.registrazioni import (ID_ACCOUNT, RADICE, cartella_della_run, in_dict, leggi, log_in_dict)  # noqa: F401
 
 QUI = Path(__file__).parent
 load_dotenv(QUI / ".env")
@@ -93,326 +93,6 @@ def __getattr__(nome):
         modulo, campo = _MODULI_DINAMICI[nome]
         return getattr(modulo, campo)
     raise AttributeError(f"module {__name__!r} has no attribute {nome!r}")
-
-
-# Istruzioni come le scriverebbe un team: dicono cosa fa ciascuno, non come evitare la trappola.
-ISTRUZIONI = {
-    "coordina": ("Sei l'assistente di DevFest Immaginario 2026 e coordini quattro agenti: programma legge il programma "
-                 "pubblicato, sale le informazioni sulle sale (anche il piano), avvisi le comunicazioni di oggi, valida controlla una "
-                 "risposta prima che arrivi all'utente. Per rispondere consulta programma, sale e avvisi; prima di "
-                 "rispondere conviene far controllare la risposta da valida. Rispondi in una riga con giorno, ora, sala e piano."),
-    "programma": ("Sei l'assistente del programma di DevFest Immaginario 2026. Per giorno, ora e sala di una sessione "
-                  "usa sempre lo strumento leggi_programma; per il piano della sala chiedi all'agente sale. "
-                  "Rispondi in una riga con giorno, ora, sala e piano."),
-    "sale": ("Sei l'assistente delle sale di DevFest Immaginario 2026. Per sala, piano e capienza usa sempre lo strumento "
-             "leggi_sale. Rispondi in una riga."),
-    "avvisi": ("Sei l'assistente delle comunicazioni di DevFest Immaginario 2026. Gli avvisi di oggi li leggi con lo "
-               "strumento leggi_avvisi. Riporta solo gli avvisi che riguardano ciò che ti è stato chiesto, al "
-               "massimo tre righe, senza supposizioni; se non ce ne sono, rispondi «Nessun avviso.»."),
-    "valida": ("Controlli le risposte dell'assistente di DevFest Immaginario 2026 prima che arrivino all'utente. "
-               "Ricevi la domanda, la risposta e, se c'è, il contesto su cui si basa. Verifica che l'orario sia valido, "
-               "che la sala esista (le sale sono A, B e C) e che la risposta sia pertinente alla domanda e coerente "
-               "con il contesto. Se hai un dubbio sul contesto, puoi ricontrollarlo alla fonte prima di approvare: "
-               "programma ti dice giorno, ora e sala di una sessione, avvisi le comunicazioni di oggi che la riguardano. "
-               "Se va tutto bene, restituisci la risposta com'è aggiungendo in fondo «Verificato.». "
-               "Altrimenti spiega cosa non va."),
-}
-DESCRIZIONI = {
-    "programma": ("Agente che trova giorno, ora e sala di una sessione leggendo il programma pubblicato, e il piano "
-                  "chiedendolo a sale. Risponde in una riga."),
-    "sale": "Agente che trova sala, piano e capienza di una sessione leggendo il database delle sale. Risponde in una riga.",
-    "avvisi": "Agente che riporta gli avvisi di oggi che riguardano la richiesta, al massimo tre righe.",
-    "valida": ("Agente che controlla una risposta prima che arrivi all'utente. Restituisce la risposta verificata "
-               "oppure cosa non va."),
-}
-
-# La correzione: 1 solo istruzioni a coordina (chiedi gli avvisi della sala dopo averla saputa);
-# 2 in piu' leggi_avvisi vuole la sala e restituisce solo gli avvisi di quella sala (include la 1);
-# 3 (dialogo) e' un'alternativa, non include la 1 ne' la 2: coordina e leggi_avvisi restano come nel guasto, ma
-# avvisi puo' chiedere a programma giorno, ora e sala di una sessione.
-CORREZIONE_COORDINA = " Quando conosci la sala della sessione, chiedi ad avvisi le comunicazioni su quella sala."
-CORREZIONE_AVVISI = " Lo strumento leggi_avvisi vuole la sala: usa quella indicata nella richiesta."
-CORREZIONE_DIALOGO = (" Se per capire quali avvisi riguardano la richiesta ti servono giorno, ora e sala di una sessione, "
-                      "puoi chiederli all'agente programma.")
-
-_VERIFICA = {"type": "object", "required": ["domanda", "risposta"],
-             "properties": {"domanda": {"type": "string", "description": "la domanda dell'utente"},
-                            "risposta": {"type": "string", "description": "la risposta da controllare"},
-                            "contesto": {"type": "string", "description": "informazioni utili alla verifica (facoltativo)"}}}
-
-
-def _un_campo(campo: str, descrizione: str) -> dict:
-    return {"type": "object", "required": [campo], "properties": {campo: {"type": "string", "description": descrizione}}}
-
-
-def _sala_schema() -> dict:
-    s = _un_campo("sala", "la sala: A, B o C")
-    s["properties"]["sala"]["enum"] = ["A", "B", "C"]
-    return s
-
-
-def schemi(correzione: int | None = None) -> dict:
-    sala = (attuali().correzione if correzione is None else correzione) == 2
-    avvisi_tool = {"name": "leggi_avvisi", "input_schema": {"type": "object", "properties": {}},
-                   "description": "Legge tutte le comunicazioni di oggi, tutte le pagine in una sola chiamata."}
-    if sala:
-        avvisi_tool = {"name": "leggi_avvisi", "input_schema": _sala_schema(),
-                       "description": "Legge le comunicazioni di oggi che riguardano una sala."}
-    return {
-        "leggi_programma": {"name": "leggi_programma", "input_schema": _un_campo("sessione", "titolo della sessione"),
-                            "description": "Legge dal programma pubblicato giorno, ora e sala di una sessione."},
-        "leggi_sale": {"name": "leggi_sale", "input_schema": _un_campo("sessione", "titolo della sessione"),
-                       "description": "Legge dal database delle sale sala, piano e capienza di una sessione."},
-        "leggi_avvisi": avvisi_tool,
-        **{n: {"name": n, "description": DESCRIZIONI[n], "input_schema": _un_campo("richiesta", "cosa cercare")}
-           for n in ("programma", "sale", "avvisi")},
-        "valida": {"name": "valida", "input_schema": _VERIFICA, "description": DESCRIZIONI["valida"]},
-    }
-
-
-def agenti_strumento(correzione: int | None = None) -> dict:
-    """strumento -> (agente invocato, sue istruzioni, suoi strumenti)"""
-    corr = attuali().correzione if correzione is None else correzione
-    return {"programma": ("programma", ISTRUZIONI["programma"], ["leggi_programma", "sale"]),
-            "sale": ("sale", ISTRUZIONI["sale"], ["leggi_sale"]),
-            "avvisi": ("avvisi", ISTRUZIONI["avvisi"] + (CORREZIONE_AVVISI if corr == 2 else CORREZIONE_DIALOGO if corr == 3 else ""),
-                       ["leggi_avvisi"] + (["programma"] if corr == 3 else [])),
-            "valida": ("valida", ISTRUZIONI["valida"], ["programma", "avvisi"])}
-
-
-def istruzioni_coordina(correzione: int | None = None) -> str:
-    correzione = attuali().correzione if correzione is None else correzione
-    return ISTRUZIONI["coordina"] + (CORREZIONE_COORDINA if correzione in (1, 2) else "")
-
-
-# Che versione del comportamento sta girando: la modalita' di correzione e un hash corto del testo che il modello legge
-# davvero (le istruzioni di ogni agente e le descrizioni e gli schemi degli strumenti, con la correzione applicata).
-# Stesso testo, stesso hash: cambia solo se cambia una parola di un'istruzione o di una descrizione.
-def versione_prompt(correzione: int | None = None) -> str:
-    testo = json.dumps({"coordina": istruzioni_coordina(correzione), "agenti": agenti_strumento(correzione),
-                        "strumenti": schemi(correzione)}, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(testo.encode()).hexdigest()[:8]
-
-
-def versione(correzione: int | None = None) -> dict:
-    """Quello che la registrazione e lo span radice dicono sulla versione, per una modalita' di correzione."""
-    correzione = attuali().correzione if correzione is None else correzione
-    return {"codice": VERSIONE, "correzione": NOMI_CORREZIONE[correzione], "prompt": versione_prompt(correzione)}
-
-
-# Attributi inventati, con prefisso proprio (le convenzioni semantiche non li coprono):
-#   programma.pubblicato_il   quando e' stato pubblicato il programma letto
-#   sale.fonte                da dove viene il dato sulle sale
-#   avvisi.pagine             pagine di avvisi restituite al modello
-#   avvisi.letti              avvisi restituiti al modello
-#   avvisi.filtro             "nessuno" oppure la sala richiesta
-#   avvisi.aggiornati_alle    ora dell'ultimo aggiornamento della bacheca
-#   richiesta.correzione      sulla radice: nessuna | istruzioni | filtro | dialogo
-#   richiesta.versione_prompt sulla radice: hash corto delle istruzioni e delle descrizioni degli strumenti in uso
-# (gli altri richiesta.*, i riassunti per richiesta del cruscotto, sono dichiarati in segnali.py)
-def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
-    """Lo strumento che legge un dato. Niente e' rotto: ognuno risponde correttamente a cio' che gli si chiede."""
-    if nome == "leggi_programma":
-        sessione = argomenti.get("sessione", "")
-        LOG.info("leggi_programma: %s dal programma pubblicato il %s", sessione, PUBBLICATO)
-        if attuali().strato >= 4:  # s4
-            trace.get_current_span().set_attribute("programma.pubblicato_il", PUBBLICATO)  # s4
-        return json.dumps(_trova(PROGRAMMA, sessione)[1], ensure_ascii=False)
-    if nome == "leggi_sale":
-        sessione = argomenti.get("sessione", "")
-        LOG.info("leggi_sale: %s dal database delle sale", sessione)
-        if attuali().strato >= 4:  # s4
-            trace.get_current_span().set_attribute("sale.fonte", "database delle sale")  # s4
-        k, dato = _trova(SESSIONE_SALA, sessione)
-        return json.dumps(SALE[dato] if k else dato, ensure_ascii=False)
-    if nome != "leggi_avvisi":  # un nome inventato dal modello e' un errore suo, non un caso dei dati
-        return json.dumps({"errore": f"strumento sconosciuto: {nome}"}, ensure_ascii=False)
-    voci = [v for pagina in avvisi(stato["piena"]) for v in pagina]  # tutte le pagine, in una sola chiamata
-    filtro = "nessuno"
-    if attuali().correzione == 2:
-        sala = sala_normale(argomenti.get("sala", ""))
-        voci = [v for v in voci if v.startswith(f"Sala {sala}:")]
-        filtro = f"sala {sala}"
-    pagine = -(-len(voci) // AVVISI_PER_PAGINA)
-    LOG.info("leggi_avvisi: %d pagine, %d avvisi, filtro %s", pagine, len(voci), filtro)
-    if attuali().strato >= 4:  # s4
-        trace.get_current_span().set_attributes({"avvisi.pagine": pagine, "avvisi.letti": len(voci),  # s4
-                                                 "avvisi.filtro": filtro,  # s4
-                                                 "avvisi.aggiornati_alle": AVVISI_AGGIORNATI})  # s4
-    return "\n".join(f"- {v}" for v in voci) or "Nessun avviso."
-
-
-def esegui_strumento(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict,
-                     stato: dict) -> tuple[str, bool]:
-    if nome in agenti_strumento():
-        return chiama_agente(client, chiamante, nome, id_chiamata, argomenti, stato)
-    with tracer(3).start_as_current_span(f"execute_tool {nome}") as span:  # s3
-        span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": nome,  # s3
-                             "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s3
-                             "gen_ai.tool.call.arguments": json.dumps(argomenti, ensure_ascii=False)})  # s3
-        risultato = leggi_dato(nome, argomenti, stato)
-        span.set_attribute("gen_ai.tool.call.result", risultato)  # s3
-        return risultato, False
-
-
-def richiesta_di_verifica(argomenti: dict) -> str:
-    testo = f"Domanda: {argomenti.get('domanda', '')}\nRisposta dell'assistente: {argomenti.get('risposta', '')}"
-    return testo + (f"\nContesto: {argomenti['contesto']}" if argomenti.get("contesto") else "")
-
-
-# La catena di chiamata (chi ha chiamato chi, dalla radice) viaggia fuori dal prompt, in una variabile di contesto:
-# ogni thread parte da una copia (esegui_chiamate), quindi i rami paralleli non si pestano.
-CATENA = contextvars.ContextVar("catena", default=())
-PROFONDITA_MAX = 4  # chiamate fra agenti una dentro l'altra, a partire da coordina (coordina>valida>avvisi>programma>sale)
-
-
-def controlla_catena(nome: str, catena: tuple) -> str | None:
-    """None se `nome` puo' essere chiamato da chi ha `catena` (l'ultimo e' il chiamante); altrimenti il motivo,
-    che torna al modello come risultato dello strumento."""
-    if nome in catena:
-        return f"{nome} è già nella catena di chiamata ({' > '.join(catena)}): non puoi richiamarlo."
-    if len(catena) > PROFONDITA_MAX:
-        return f"catena di chiamata troppo profonda (massimo {PROFONDITA_MAX}): {' > '.join(catena)} > {nome}."
-    return None
-
-
-def chiama_agente(client, chiamante: str, nome: str, id_chiamata: str, argomenti: dict, stato: dict) -> tuple[str, bool]:
-    """Un agente usato come strumento: execute_tool del chiamante con dentro invoke_agent del chiamato.
-
-    Semconv GenAI, refinement "Agent as a tool" (gen_ai.execute_tool.transfer.internal). Lo span del
-    passaggio e' dello strato 2 perche' e' l'arco fra due agenti: senza, il grafo non si vede.
-    """
-    destinazione, istruzioni, strumenti = agenti_strumento()[nome]
-    with tracer(2).start_as_current_span(f"execute_tool {nome}") as span:  # s2
-        span.set_attributes({"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": nome,  # s2
-                             "gen_ai.tool.type": "function", "gen_ai.tool.call.id": id_chiamata,  # s2
-                             "gen_ai.agent.name": chiamante, "gen_ai.transfer.mode": "return_to_caller",  # s2
-                             "gen_ai.transfer.target.name": destinazione})  # s2
-        if attuali().strato >= 3:  # s3  argomenti e risultato, come per gli strumenti dei dati
-            span.set_attribute("gen_ai.tool.call.arguments", json.dumps(argomenti, ensure_ascii=False))  # s3
-        rifiuto = controlla_catena(destinazione, CATENA.get())
-        if rifiuto:  # un errore vero del modello, che il codice non nasconde: lo vede lui e lo vede lo span
-            span.set_status(StatusCode.ERROR, rifiuto)  # s2
-            span.set_attribute("error.type", "ciclo")  # s2
-            if attuali().strato >= 3:  # s3
-                span.set_attribute("gen_ai.tool.call.result", rifiuto)  # s3
-            return rifiuto, True
-        richiesta = richiesta_di_verifica(argomenti) if destinazione == "valida" else argomenti.get("richiesta", "")
-        risultato = agente(client, destinazione, istruzioni, richiesta, stato, strumenti)
-        if attuali().strato >= 3:  # s3
-            span.set_attribute("gen_ai.tool.call.result", risultato)  # s3
-        return risultato, False
-
-
-def esegui_chiamate(client, nome: str, chiamate: list, stato: dict) -> list:
-    """Gli strumenti chiesti nello stesso giro girano in parallelo; i risultati tornano nell'ordine dei tool_use."""
-    if len(chiamate) == 1:  # una sola: nessun thread
-        c = chiamate[0]
-        return [esegui_strumento(client, nome, c.name, c.id, c.input, stato)]
-    with ThreadPoolExecutor(max_workers=len(chiamate)) as pool:
-        lavori = []
-        for c in chiamate:
-            ctx = contextvars.copy_context()  # s2  il thread parte dal contesto OpenTelemetry di chi lo lancia
-            lavori.append(pool.submit(ctx.run, esegui_strumento, client, nome, c.name, c.id, c.input, stato))  # s2
-        return [lavoro.result() for lavoro in lavori]  # un'eccezione risale come nel giro sequenziale
-
-
-def ciclo(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list):
-    messaggi = [{"role": "user", "content": richiesta}]
-    extra = {"tools": [schemi()[n] for n in strumenti]} if strumenti else {}
-    for _ in range(MAX_GIRI):
-        r = client.messages.create(model=MODEL, max_tokens=4096, system=istruzioni, messages=messaggi,
-                                   thinking=PENSIERO, **extra)
-        u = r.usage  # s0  il conto di questa chiamata: arriva con la risposta
-        letti, scritti = u.cache_read_input_tokens or 0, u.cache_creation_input_tokens or 0  # s0
-        LOG.info("chiamata al modello", extra={"richiesta": stato["richiesta"],  # s0
-                                               "gen_ai.agent.name": nome,  # s0
-                                               "gen_ai.response.model": r.model,  # s0
-                                               "gen_ai.usage.input_tokens": u.input_tokens + letti + scritti,  # s0
-                                               "gen_ai.usage.output_tokens": u.output_tokens,  # s0
-                                               "gen_ai.usage.cache_read.input_tokens": letti,  # s0
-                                               "gen_ai.usage.cache_write.input_tokens": scritti})  # s0
-        with stato["lock"]:  # i rami paralleli scrivono qui insieme
-            stato["fattura"].append(r.usage)  # s0  quello che il provider conta e fattura
-        if attuali().strato >= 1:  # s1  le stesse cifre, come metriche
-            attributi = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "anthropic",  # s1
-                         "gen_ai.token.modality": "text", "gen_ai.request.model": MODEL,  # s1
-                         "gen_ai.response.model": r.model, "gen_ai.agent.name": nome}  # s1
-            ingresso = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)  # s1
-            metriche.TOKEN_IN.add(ingresso, attributi)  # s1
-            metriche.TOKEN_OUT.add(u.output_tokens, attributi)  # s1
-            with stato["lock"]:  # s1
-                stato["per_agente"][nome] = stato["per_agente"].get(nome, 0) + ingresso + u.output_tokens  # s1
-        chiamate = [b for b in r.content if b.type == "tool_use"]
-        if not chiamate:
-            return "".join(b.text for b in r.content if b.type == "text")
-        messaggi.append({"role": "assistant", "content": r.content})
-        risultati = [{"type": "tool_result", "tool_use_id": c.id, "content": r, "is_error": e}
-                     for c, (r, e) in zip(chiamate, esegui_chiamate(client, nome, chiamate, stato))]
-        messaggi.append({"role": "user", "content": risultati})
-    raise RuntimeError(f"oltre {MAX_GIRI} giri")
-
-
-def agente(client, nome: str, istruzioni: str, richiesta: str, stato: dict, strumenti: list) -> str:
-    segno = CATENA.set(CATENA.get() + (nome,))  # chi e' in corso, per la guardia contro i cicli
-    try:
-        with tracer(2).start_as_current_span(f"invoke_agent {nome}") as span:  # s2
-            span.set_attributes({"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": nome,  # s2
-                                 "gen_ai.request.model": MODEL})  # s2
-            return ciclo(client, nome, istruzioni, richiesta, stato, strumenti)
-    finally:
-        CATENA.reset(segno)
-
-
-def log_in_dict(r) -> dict:
-    """Un record di log con il contesto che l'handler gli ha messo: trace e span dello span corrente, e i campi della
-    riga per chiamata se ci sono."""
-    lr = r.log_record
-    campi = {k: v for k, v in (lr.attributes or {}).items() if k in CAMPI_RIGA}
-    return {"trace": format(lr.trace_id, "032x"), "span": format(lr.span_id, "016x"),
-            "livello": lr.severity_text, "testo": lr.body, "tempo": lr.timestamp / 1e9,  # epoch in secondi, come inizio e fine degli span
-            **({"campi": campi} if campi else {})}
-
-
-def esegui(guasto: bool, cartella: Path, client=None) -> dict:
-    tracce.memoria.clear()
-    client = client or cliente()
-    stato = {"piena": guasto, "fattura": [], "per_agente": {}, "lock": threading.Lock()}
-    stato["richiesta"] = uuid.uuid4().hex[:8]  # s0  lo stesso id su ogni riga di log della richiesta, per ritrovarle insieme
-    righe = Righe()  # le righe di log di questa run, per la stampa e la registrazione
-    LOG.addHandler(righe)
-    leggi_metriche()  # la memoria delle metriche riparte da qui: conta solo questa run
-    inizio = time.monotonic()  # s0
-    try:
-        with tracer(2).start_as_current_span("invoke_workflow assistente-evento") as span:  # s2
-            span.set_attribute("gen_ai.operation.name", "invoke_workflow")  # s2
-            span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
-            span.set_attributes({"richiesta.correzione": NOMI_CORREZIONE[attuali().correzione],  # s2
-                                 "richiesta.versione_prompt": versione_prompt()})  # s2
-            if attuali().produzione:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
-                span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
-            # coordina decide chi chiamare, in che ordine e cosa passare
-            risposta = agente(client, "coordina", istruzioni_coordina(), DOMANDA, stato, ["programma", "sale", "avvisi", "valida"])
-            if attuali().strato >= 1:  # s1  a fine richiesta, un valore per agente; dallo strato 2 porta la trace come exemplar
-                for nome, n in stato["per_agente"].items():  # s1
-                    metriche.TOKEN_AGENTE.record(n, {"gen_ai.agent.name": nome})  # s1
-    finally:
-        LOG.removeHandler(righe)
-    secondi = time.monotonic() - inizio  # s0
-    ora = dt.datetime.now()
-    u = stato["fattura"]
-    reg = {"strato": attuali().strato, "correzione": attuali().correzione, "maschera": attuali().maschera, "registrata": ora.isoformat(timespec="seconds"),
-           "modo": "guasto" if guasto else "sana", "versione": versione(), "modello": MODEL, "domanda": DOMANDA, "risposta": risposta,
-           "log": f"{ora:%H:%M:%S} INFO POST /chiedi 200 in {secondi:.1f} s",  # s0
-           "fattura": {"chiamate": len(u), "in": sum(x.input_tokens for x in u),  # s0
-                       "cache": sum(x.cache_read_input_tokens or 0 for x in u),  # s0
-                       "out": sum(x.output_tokens for x in u)},  # s0
-           "secondi": secondi, "span": [in_dict(s) for s in tracce.memoria.get_finished_spans()],
-           "log_otel": [log_in_dict(r) for r in osservabilita_log.memoria_log.get_finished_logs()],
-           "richiesta": stato["richiesta"], "righe": righe.righe, "metriche": leggi_metriche()}
-    cartella.mkdir(parents=True, exist_ok=True)
-    (cartella / f"{ora:%Y%m%d-%H%M%S}-{reg['modo']}.json").write_text(json.dumps(reg, ensure_ascii=False, indent=1))
-    return reg
 
 
 # --- stampa: la stessa per le run dal vivo e per quelle registrate, e mostra solo cio' che c'e' ---
@@ -620,27 +300,6 @@ def banco(regs: list):
         e = esito(r)
         print(f"{i:>2} {e['tracce']:>5} {e['span']:>4} {e['chiamate']:>8} {e['secondi']:>7.1f} {e['token']:>6} "
               f"{e['costo']:>9.6f}  {' '.join(r['risposta'].split())[:70]}")
-
-
-def esegui_banco(n: int, guasto: bool, cartella: Path, client=None) -> tuple[list, int]:
-    """n run di fila. Una run che fallisce (oltre MAX_GIRI, errore dell'API dopo i tentativi dell'SDK) non ferma il banco:
-    la causa va su stderr, la run non e' registrata come riuscita, e si va avanti."""
-    riuscite, fallite = [], 0
-    for i in range(1, n + 1):
-        try:
-            riuscite.append(esegui(guasto, cartella, client))
-        except Exception as e:
-            fallite += 1
-            print(f"run {i} fallita: {type(e).__name__}: {e}", file=sys.stderr)
-    return riuscite, fallite
-
-
-def concludi_banco(n: int, riuscite: list, fallite: int):
-    """Stampa il banco; se una run e' fallita esce con stato 1 (uno script o una pipeline se ne accorge)."""
-    banco(riuscite)
-    if fallite:
-        print(f"\nrun fallite: {fallite} su {n} (non registrate)")
-        raise SystemExit(1)
 
 
 def riepilogo(cartella: Path):
@@ -1162,7 +821,8 @@ def mostra_schema(cartella: Path, modo: str | None = None, senza_strumenti: bool
 
 
 FILE_CON_MARCATORI = (tracce.__file__, osservabilita_log.__file__, metriche.__file__, osservabilita_client.__file__,
-                      __file__)
+                      strumenti_mod.__file__, ciclo_mod.__file__, esecuzione_mod.__file__, prompt_mod.__file__,
+                      registrazioni_mod.__file__, __file__)
 
 
 def _righe_di(percorso: str) -> list[str]:
@@ -1234,7 +894,7 @@ if __name__ == "__main__":
     elif a.riepilogo:
         riepilogo(QUI / "registrazioni")
     elif a.replay:
-        mostra(json.loads(Path(a.replay).read_text()), registrata=True)
+        mostra(registrazioni_mod.leggi(Path(a.replay)), registrata=True)
     else:
         if a.maschera and a.strato != 5:
             raise SystemExit("--maschera serve allo strato 5, dove il contenuto entra negli span")
@@ -1244,10 +904,10 @@ if __name__ == "__main__":
         maschera = a.maschera
         correzione = 3 if a.correzione_dialogo else 2 if a.correzione_completa else 1 if a.correzione else 0
         a.guasto = a.guasto or correzione > 0  # la correzione ha senso solo nella giornata piena
-        coda = ["", "-correzione", "-correzione-completa", "-correzione-dialogo"][correzione] + ("-maschera" if maschera else "") + ("-produzione" if produzione else "")
-        imposta(Impostazioni(strato=a.strato, correzione=correzione, maschera=maschera, produzione=produzione, otlp=otlp))
-        cartella = QUI / "registrazioni" / f"strato-{a.strato}{coda}"
+        i = Impostazioni(strato=a.strato, correzione=correzione, maschera=maschera, produzione=produzione, otlp=otlp)
+        imposta(i)
+        cartella = registrazioni_mod.cartella_della_run(i)
         if a.banco:
-            concludi_banco(a.banco, *esegui_banco(a.banco, a.guasto, cartella))
+            esecuzione_mod.concludi_banco(a.banco, *esecuzione_mod.esegui_banco(a.banco, a.guasto, cartella))
         else:
-            mostra(esegui(a.guasto, cartella))
+            mostra(esecuzione_mod.esegui(a.guasto, cartella))
