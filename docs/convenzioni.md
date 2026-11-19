@@ -42,6 +42,7 @@ ricontrolli di `valida` e il dialogo.
 
 ```bash
 pytest -q    # controlli senza rete, contro un server finto; segnali, cruscotto e rimando a Tempo
+ruff check .  # lint; il formatter non si usa, perche' spezzerebbe le righe marcate # sN
 ```
 
 I test girano sul server finto e sulle registrazioni finte: non chiamano l'API e non toccano le registrazioni del banco.

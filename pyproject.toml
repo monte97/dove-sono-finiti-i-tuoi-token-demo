@@ -27,6 +27,8 @@ python_files = ["test_*.py"]
 [tool.setuptools.packages.find]
 include = ["osservare_a_strati*"]
 
+# Solo `ruff check`, niente `ruff format`: il formatter spezza le righe marcate `# sN` su piu' righe, e cambierebbe
+# il conteggio di `strati righe` e il codice che `strati codice N` estrae per le slide.
 [tool.ruff]
 line-length = 120
 
