@@ -175,7 +175,7 @@ def test_codice_pulito():
     assert not any(b.startswith((" ", "\t")) for b in righe_mod.codice(0).split("\n...\n"))  # lo strato 0 esce a margine, senza il lock
     assert "lock" not in righe_mod.codice(0) and 'stato["fattura"].append(r.usage)' in righe_mod.codice(0)
     assert '"out": sum(x.output_tokens for x in u)},' in righe_mod.codice(0)  # il dizionario della fattura e' intero
-    assert "cache.read" not in Path(esecuzione.__file__).read_text()
+    assert not any("cache.read" in f.read_text() for f in Path(esecuzione.__file__).parent.rglob("*.py"))  # in tutto il pacchetto
 
 
 def test_otlp_mascherato():
