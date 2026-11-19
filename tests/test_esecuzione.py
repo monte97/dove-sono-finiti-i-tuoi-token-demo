@@ -1,6 +1,6 @@
 """Test di esecuzione. Nati dal riordino: produzione e impostazioni fra due run."""
 import server_finto as sf
-from server_finto import *  # noqa: F401,F403
+from server_finto import *
 
 from osservare_a_strati.esecuzione import concludi_banco, esegui, esegui_banco  # noqa: F401
 from osservare_a_strati.impostazioni import con

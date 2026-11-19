@@ -1,6 +1,5 @@
 """Il comando `strati`: run, replay, riepilogo, misure, schema, righe, segnali, controllo, cruscotto."""
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -62,13 +61,7 @@ def _banco(a) -> int:
 
 
 def _replay(a) -> int:
-    reg = registrazioni_mod.leggi(Path(a.file))
-    if not reg.get("richiesta") and reg.get("span"):
-        # l'id stabile delle registrazioni vecchie: lo stesso che usa il cruscotto (invio.righe_ricostruite)
-        reg["richiesta"] = hashlib.sha1(reg["span"][0]["trace"].encode()).hexdigest()[:8]
-    if reg.get("richiesta"):
-        print(f"richiesta {reg['richiesta']}")
-    mostra(reg, registrata=True)
+    mostra(registrazioni_mod.leggi(Path(a.file)), registrata=True)
     return 0
 
 

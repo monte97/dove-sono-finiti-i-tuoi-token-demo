@@ -2,21 +2,13 @@
 import contextlib
 import io
 import json
-import re
 import tempfile
-import threading
-import time
 from pathlib import Path
 
-import httpx2 as httpx
-import server_finto as sf
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from server_finto import *  # noqa: F401,F403
+from server_finto import *
+
 
 def test_controllo_salta_il_formato_vecchio():
-    import tempfile, json
-    from pathlib import Path
     from osservare_a_strati.analisi import controllo
     d = Path(tempfile.mkdtemp())
     (d / "vecchia.json").write_text(json.dumps({**run(), "dominio": "orario"}))

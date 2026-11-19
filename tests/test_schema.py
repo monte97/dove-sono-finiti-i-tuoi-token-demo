@@ -1,18 +1,12 @@
 """Test di schema. Nati da test_strati.py e test_segnali.py, divisi per argomento."""
-import contextlib
-import io
 import json
 import re
-import tempfile
-import threading
-import time
-from pathlib import Path
 
-import httpx2 as httpx
-import server_finto as sf
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from server_finto import *  # noqa: F401,F403
+from server_finto import *
+
+from osservare_a_strati.analisi import schema as schema_mod
+from osservare_a_strati.analisi import span as span_mod
+
 
 def test_schema_conteggi_e_rimpalli():
     cartella = cartella_finta(3, annidate=True, valida_sala=True)
@@ -76,17 +70,17 @@ def test_schema_volte_per_run_nell_etichetta():
     regs = [json.loads(f.read_text()) for f in sorted(cartella_finta(1).glob("*.json"))]
     sdoppiato = json.loads(json.dumps(regs[0]))
     # una chiamata in piu' coordina → sale nella stessa run: 2 volte, in 1 run
-    x = next(y for y in sdoppiato["span"] if s.attr(y, "gen_ai.transfer.target.name") == "sale")
+    x = next(y for y in sdoppiato["span"] if span_mod.attr(y, "gen_ai.transfer.target.name") == "sale")
     y = json.loads(json.dumps(x))
     y["id"] = "duplicato"
     sdoppiato["span"].append(y)
-    _, mermaid = s.schema([sdoppiato])
+    _, mermaid = schema_mod.schema([sdoppiato])
     assert "coordina -->|1/1 ×2.0| sale" in mermaid and "coordina -->|1/1| programma" in mermaid
     assert "#c0392b" not in mermaid  # sale e' chiamato solo da coordina: nessuna strada in piu'
     # la media si arrotonda a un decimale: 3 volte in 2 run = ×1.5, 7 in 3 = ×2.3, e 1.04 non e' piu' di 1
     base = json.loads(json.dumps(regs[0]))
     due = [json.loads(json.dumps(base)), sdoppiato]  # 1 chiamata in una run, 2 nell'altra
-    _, m3 = s.schema(due)
+    _, m3 = schema_mod.schema(due)
     assert "coordina -->|2/2 ×1.5| sale" in m3
 
 

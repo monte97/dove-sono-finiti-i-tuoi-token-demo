@@ -11,112 +11,15 @@ import httpx2 as httpx
 
 from osservare_a_strati import esecuzione as _esecuzione
 from osservare_a_strati import modello as _modello
-from osservare_a_strati import registrazioni as _registrazioni
-from osservare_a_strati import righe as _righe
 from osservare_a_strati import stampa as _stampa
-from osservare_a_strati import valutazione as _valutazione
-from osservare_a_strati.agenti import ciclo as _ciclo
-from osservare_a_strati.agenti import prompt as _prompt
-from osservare_a_strati.agenti import strumenti as _strumenti
-from osservare_a_strati.analisi import misure as _misure
 from osservare_a_strati.analisi import schema as _schema
-from osservare_a_strati.analisi import segnali as _segnali
 from osservare_a_strati.analisi import span as _span
 from osservare_a_strati.evento import avvisi as _avvisi
 from osservare_a_strati.evento import dati as _dati
 from osservare_a_strati.impostazioni import con
 from osservare_a_strati.osservabilita import client as _client
-from osservare_a_strati.osservabilita import log as _oslog
-from osservare_a_strati.osservabilita import tracce as _tracce
-from osservare_a_strati.osservabilita.riassunto import RiassuntoSullaRadice as _RiassuntoSullaRadice
 
-_QUI = Path(__file__).resolve().parent.parent
-
-_MAPPA_S = {
-    "__file__": (_esecuzione, "__file__"),
-    "_provider_log": (_oslog, "_provider_log"),
-    "_trova": (_dati, "_trova"),
-    "agenti_strumento": (_prompt, "agenti_strumento"),
-    "approva": (_valutazione, "approva"),
-    "archi": (_span, "archi"),
-    "attr": (_span, "attr"),
-    "avvisi": (_avvisi, "avvisi"),
-    "AVVISI_AGGIORNATI": (_dati, "AVVISI_AGGIORNATI"),
-    "AVVISI_PER_PAGINA": (_avvisi, "AVVISI_PER_PAGINA"),
-    "AVVISO_CHIAVE": (_avvisi, "AVVISO_CHIAVE"),
-    "CATENA": (_ciclo, "CATENA"),
-    "chiamate_dagli_span": (_span, "chiamate_dagli_span"),
-    "classe_domanda": (_valutazione, "classe_domanda"),
-    "cliente": (_client, "cliente"),
-    "codice": (_righe, "codice"),
-    "con_email": (_stampa, "con_email"),
-    "concludi_banco": (_esecuzione, "concludi_banco"),
-    "controlla_catena": (_ciclo, "controlla_catena"),
-    "CORREZIONE_DIALOGO": (_prompt, "CORREZIONE_DIALOGO"),
-    "costo": (_modello, "costo"),
-    "costo_per_agente": (_span, "costo_per_agente"),
-    "DOMANDA": (_dati, "DOMANDA"),
-    "domande_ad_avvisi": (_span, "domande_ad_avvisi"),
-    "EMAIL": (_tracce, "EMAIL"),
-    "esegui": (_esecuzione, "esegui"),
-    "esegui_banco": (_esecuzione, "esegui_banco"),
-    "esegui_chiamate": (_ciclo, "esegui_chiamate"),
-    "ESITI": (_valutazione, "ESITI"),
-    "esito": (_misure, "esito"),
-    "grafo": (_span, "grafo"),
-    "ID_ACCOUNT": (_registrazioni, "ID_ACCOUNT"),
-    "in_dict": (_registrazioni, "in_dict"),
-    "ISTRUZIONI": (_prompt, "ISTRUZIONI"),
-    "istruzioni_coordina": (_prompt, "istruzioni_coordina"),
-    "leggi_dato": (_strumenti, "leggi_dato"),
-    "LOG": (_oslog, "LOG"),
-    "memoria": (_tracce, "memoria"),
-    "misura": (_misure, "misura"),
-    "misure": (_misure, "misure"),
-    "MODEL": (_modello, "MODEL"),
-    "mostra": (_stampa, "mostra"),
-    "mostra_schema": (_schema, "mostra_schema"),
-    "PAGINA_AVVISO": (_avvisi, "PAGINA_AVVISO"),
-    "PAGINE_PIENA": (_avvisi, "PAGINE_PIENA"),
-    "PAGINE_TRANQUILLA": (_avvisi, "PAGINE_TRANQUILLA"),
-    "PROGRAMMA": (_dati, "PROGRAMMA"),
-    "quota_riletture": (_span, "quota_riletture"),
-    "riepilogo": (_misure, "riepilogo"),
-    "righe": (_righe, "righe"),
-    "riporta_avviso": (_valutazione, "riporta_avviso"),
-    "schema": (_schema, "schema"),
-    "schemi": (_prompt, "schemi"),
-    "url_log": (_oslog, "url_log"),
-    "valuta": (_valutazione, "valuta"),
-    "VERSIONE": (_tracce, "VERSIONE"),
-    "versione_prompt": (_prompt, "versione_prompt"),
-}
-
-
-class _S:
-    """I nomi che i test usano come `s.`: ogni lettura va al modulo che li possiede, al momento dell'uso."""
-
-    def __getattr__(self, nome):
-        if nome == "QUI":
-            return _QUI
-        try:
-            modulo, campo = _MAPPA_S[nome]
-        except KeyError:
-            raise AttributeError(f"module {__name__!r} has no attribute {nome!r}") from None
-        return getattr(modulo, campo)
-
-
-class _SG:
-    """I nomi di `sg.`: i segnali e il riassunto sulla radice."""
-
-    def __getattr__(self, nome):
-        if nome == "RiassuntoSullaRadice":
-            return _RiassuntoSullaRadice
-        return getattr(_segnali, nome)
-
-
-s = _S()
-sg = _SG()
+QUI = Path(__file__).resolve().parent.parent
 
 CARTELLA = Path(tempfile.mkdtemp())
 INTESTAZIONI = {"request-id": "req_finto", "anthropic-organization-id": "org-finta", "anthropic-workspace-id": "wrk-finto"}
@@ -142,7 +45,7 @@ HASH_BANCO = {0: "8909d44b", 1: "1d2a1b7e", 2: "ead55ac1", 3: "d8d06c33"}
 
 TOKEN = {"programma": (1000, 50), "sale": (1000, 50), "avvisi": (8000, 100)}
 STRUMENTO = {"programma": ("leggi_programma", {}), "sale": ("leggi_sale", {}),
-             "avvisi": ("leggi_avvisi", {"avvisi.pagine": 40, "gen_ai.tool.call.result": "- " + s.AVVISO_CHIAVE})}
+             "avvisi": ("leggi_avvisi", {"avvisi.pagine": 40, "gen_ai.tool.call.result": "- " + _avvisi.AVVISO_CHIAVE})}
 RISPOSTA = {"programma": "Oggi alle 15:00, sala B.", "sale": "Sala B, primo piano.", "avvisi": "Nessun avviso sul workshop."}
 
 FORMA = "codice>coordina coordina>{avvisi(leggi_avvisi),programma(leggi_programma),sale(leggi_sale)} coordina>valida"
@@ -181,7 +84,7 @@ def risposta_finta(richiesta):
     dati = next((x for x in corpo.get("tools", []) if x["name"].startswith("leggi_")), None)  # lo strumento dei dati
     pensiero = {"type": "thinking", "thinking": "Devo leggere il programma.", "signature": "x"}
     uso = {"input_tokens": 1000, "output_tokens": 50, "cache_read_input_tokens": 0}
-    base = {"id": "msg_finto", "type": "message", "role": "assistant", "model": s.MODEL, "usage": uso}
+    base = {"id": "msg_finto", "type": "message", "role": "assistant", "model": _modello.MODEL, "usage": uso}
     chiesti = {x["name"] for m in messaggi if isinstance(m["content"], list) for x in m["content"] if x.get("type") == "tool_use"}
     risultato = ultimo[-1]["content"] if isinstance(ultimo, list) else None
     risultati = {b["tool_use_id"].split("-", 1)[1]: str(b["content"]) for b in ultimo} if isinstance(ultimo, list) else {}
@@ -206,7 +109,7 @@ def risposta_finta(richiesta):
         if "valida" in chiesti:
             return rispondi(risultato)
         if "programma" in chiesti:
-            return chiama("valida", {"domanda": s.DOMANDA, "risposta": "Oggi alle 15:00, sala B.",
+            return chiama("valida", {"domanda": _dati.DOMANDA, "risposta": "Oggi alle 15:00, sala B.",
                                      "contesto": "Programma: oggi 15:00, sala B."})
         contenuto = [pensiero] + [{"type": "tool_use", "id": f"t1-{n}", "name": n, "input": {"richiesta": r}}
                                   for n, r in richieste.items()]  # i tre insieme, in un solo giro
@@ -232,7 +135,7 @@ def risposta_finta(richiesta):
         return chiama_molti({dati["name"]: argomenti, **altri})
     if dati:
         if dati["name"] == "leggi_avvisi" and ("sala B" in prima_richiesta or "sala B" in risultati.get("programma", "")):
-            return rispondi("- " + s.AVVISO_CHIAVE)  # sa che e' la sala B: non lascia l'avviso fra i 400
+            return rispondi("- " + _avvisi.AVVISO_CHIAVE)  # sa che e' la sala B: non lascia l'avviso fra i 400
         return rispondi({"leggi_programma": "Oggi alle 15:00, sala B" + (", piano 1." if FINTO["annidate"] else "."),
                          "leggi_sale": "Sala B, primo piano, 80 posti.",
                          "leggi_avvisi": "Nessun avviso sul workshop."}[dati["name"]])
@@ -242,10 +145,10 @@ def risposta_finta(richiesta):
 def corri(strato, guasto=True):
     with con(strato=strato):
         http = httpx.Client(transport=httpx.MockTransport(risposta_finta))
-        client = s.cliente(api_key="finta", http_client=http)
+        client = _client.cliente(api_key="finta", http_client=http)
         with contextlib.redirect_stdout(io.StringIO()) as fuori:
-            reg = s.esegui(guasto, CARTELLA, client=client)
-            s.mostra(reg)
+            reg = _esecuzione.esegui(guasto, CARTELLA, client=client)
+            _stampa.mostra(reg)
     return reg, re.sub(r"\033\[\d+m", "", fuori.getvalue())  # senza colori
 
 
@@ -291,7 +194,7 @@ def percorso(reg, x):
 
 
 def arcs(reg, verso, da=None):
-    return s.archi(reg["span"], (verso,), da=da)
+    return _span.archi(reg["span"], (verso,), da=da)
 
 
 def cartella_finta(n_guasto=2, n_sana=0, correzione=0, strato=5, **scelte):
@@ -306,7 +209,7 @@ def cartella_finta(n_guasto=2, n_sana=0, correzione=0, strato=5, **scelte):
 
 def schema_di(cartella, **opzioni):
     with contextlib.redirect_stdout(io.StringIO()) as fuori:
-        s.mostra_schema(cartella, **opzioni)
+        _schema.mostra_schema(cartella, **opzioni)
     return fuori.getvalue()
 
 

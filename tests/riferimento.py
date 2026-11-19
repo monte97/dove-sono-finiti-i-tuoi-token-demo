@@ -152,7 +152,7 @@ def controllo_invio(ad: dict, uscita: Path):
             r = json.loads(f.read_text())
             random.seed(0)
             mappa = ad["rimappa"](r, ADESSO)
-            span = [s.to_json() for s in ad["in_otlp"](r, cartella.name, ADESSO, mappa)]
+            span = [span_otlp.to_json() for span_otlp in ad["in_otlp"](r, cartella.name, ADESSO, mappa)]
             log = [l.to_json() for l in ad["log_in_otlp"](r, mappa, ad["righe_ricostruite"](r))]
             agenti = ad["misura"](r, mappa, cartella.name)
             ad["forza_metriche"]()

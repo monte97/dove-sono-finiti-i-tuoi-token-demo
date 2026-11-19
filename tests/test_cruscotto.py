@@ -3,33 +3,32 @@ import contextlib
 import io
 import json
 import re
-import tempfile
-import threading
-import time
-from pathlib import Path
 
-import httpx2 as httpx
 import server_finto as sf
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from server_finto import *  # noqa: F401,F403
+from server_finto import *
+
+from osservare_a_strati import valutazione as valutazione_mod
+from osservare_a_strati.analisi import segnali as segnali_mod
+from osservare_a_strati.analisi import span as span_mod
+from osservare_a_strati.osservabilita import tracce
+
 
 def test_cruscotto():
-    c = sg.cruscotto([run(), run(), run((("avvisi", 3.0), ("sale", 3.01), ("programma", 3.02)))])
+    c = segnali_mod.cruscotto([run(), run(), run((("avvisi", 3.0), ("sale", 3.01), ("programma", 3.02)))])
     assert c["n"] == 3 and c["approva"] == (3, 3) and c["forme"] == {FORMA: 3}  # una forma sola, non due
     assert c["costo"]["mediana"] == c["costo"]["p95"]
     assert abs(c["quota_avvisi"]["mediana"] - 8100 / TOTALE) < 1e-12
     assert c["pagine"] == {"mediana": 40, "massimo": 40}
-    assert sg.cruscotto([run(), {**run(), "strato": 3}])["pagine"] is None  # strato misto
+    assert segnali_mod.cruscotto([run(), {**run(), "strato": 3}])["pagine"] is None  # strato misto
 
 
 def test_stampa_dice_cosa_manca():
     with contextlib.redirect_stdout(io.StringIO()) as fuori:
-        sg.stampa("prova · guasto", sg.cruscotto([run(), run()]))
+        segnali_mod.stampa("prova · guasto", segnali_mod.cruscotto([run(), run()]))
     testo = fuori.getvalue()
     assert "95° percentile" in testo and "mediana 40 · massimo 40" in testo and "1 (la più frequente in 2 run)" in testo
     with contextlib.redirect_stdout(io.StringIO()) as fuori:
-        sg.stampa("strato-1 · guasto", sg.cruscotto([{**run(), "strato": 1}]))
+        segnali_mod.stampa("strato-1 · guasto", segnali_mod.cruscotto([{**run(), "strato": 1}]))
     assert fuori.getvalue().count("serve lo strato") == 4 and "serve lo strato 4" in fuori.getvalue()
 
 
@@ -90,23 +89,21 @@ def test_log_in_otlp_usa_l_orario_registrato():
 
 
 def test_la_query_del_cruscotto_approva_come_approva():
-    """Il pannello «valida approva» e s.approva devono dire lo stesso su ogni verdetto: stessa regex, anche sui testi veri."""
+    """Il pannello «valida approva» e valutazione_mod.approva devono dire lo stesso su ogni verdetto: stessa regex, anche sui testi veri."""
     import json
-    import re
-    from pathlib import Path
-    pannelli = json.loads((s.QUI / "cruscotto" / "grafana" / "segnali.json").read_text())["panels"]
+    pannelli = json.loads((QUI / "cruscotto" / "grafana" / "segnali.json").read_text())["panels"]
     q = next(t["query"] for p in pannelli for t in p.get("targets", []) if t["refId"] == "approvati")
     rx = re.compile(re.search(r'tool\.call\.result =~ "(.*?)" \}', q).group(1).replace("\\\\", "\\").replace('\\"', '"'))
     casi = ["Oggi alle 15:00. Verificato.", "Oggi alle 15:00.\n\nVerificato.**", "Verificato. Oggi alle 15:00 in sala B.",
             "Verificato.\n\nOggi alle 15:00.", "**Verificato.** Oggi.", "«Verificato.» Oggi.",
             "Non aggiungo «Verificato.» perché il dato non è aggiornato.", "**Non verificato.** Incoerente.",
             "Il dato va confermato, quindi non ho aggiunto «Verificato.».\n\nIl contesto indica 26 ore fa.", "Conviene verificare."]
-    for f in sorted((s.QUI / "registrazioni").rglob("*.json")):  # e i verdetti veri del banco
-        casi += [s.attr(x, "gen_ai.tool.call.result") or "" for x in s.archi(json.loads(f.read_text())["span"], ("valida",))]
+    for f in sorted((QUI / "registrazioni").rglob("*.json")):  # e i verdetti veri del banco
+        casi += [span_mod.attr(x, "gen_ai.tool.call.result") or "" for x in span_mod.archi(json.loads(f.read_text())["span"], ("valida",))]
     assert len(casi) > 100
     for testo in casi:
-        assert bool(rx.fullmatch(testo)) == s.approva(testo), testo[:120]
-    assert sum(s.approva(t) for t in casi[:10]) == 6  # i primi dieci: sei approvano, quattro no
+        assert bool(rx.fullmatch(testo)) == valutazione_mod.approva(testo), testo[:120]
+    assert sum(valutazione_mod.approva(t) for t in casi[:10]) == 6  # i primi dieci: sei approvano, quattro no
 
 
 def test_tempo_deriva_la_versione_dalle_registrazioni_vecchie():
@@ -117,10 +114,10 @@ def test_tempo_deriva_la_versione_dalle_registrazioni_vecchie():
         radice = next(x for x in spans if x.parent is None)
         assert radice.attributes["richiesta.correzione"] == nome
         assert radice.attributes["richiesta.versione_prompt"] == sf.HASH_BANCO[correzione]
-        assert all(x.resource.attributes["service.version"] == s.VERSIONE for x in spans)
+        assert all(x.resource.attributes["service.version"] == tracce.VERSIONE for x in spans)
         assert all(x.resource.attributes["service.name"] == "osservare-a-strati" for x in spans)
     # il campo scritto dalla run vince sulla derivazione; sotto lo strato 2 (niente radice) la versione va su ogni trace
-    scritto = {**reg, "versione": {"codice": s.VERSIONE, "correzione": "dialogo", "prompt": "abcd1234"}}
+    scritto = {**reg, "versione": {"codice": tracce.VERSIONE, "correzione": "dialogo", "prompt": "abcd1234"}}
     radice = next(x for x in tempo.in_otlp(scritto, "strato-5", 2_000_000_000.0) if x.parent is None)
     assert radice.attributes["richiesta.versione_prompt"] == "abcd1234"
     uno = {**reg, "strato": 1, "span": [x for x in reg["span"] if not x["nome"].startswith("invoke_workflow")]}
@@ -128,11 +125,11 @@ def test_tempo_deriva_la_versione_dalle_registrazioni_vecchie():
     assert senza_radice and all(x.attributes["richiesta.correzione"] == "nessuna" for x in senza_radice)
     logs = tempo.log_in_otlp({**reg, "log_otel": [{"trace": reg["span"][0]["trace"], "span": reg["span"][0]["id"],
                                                     "livello": "INFO", "testo": "x"}]}, tempo.rimappa(reg, 2e9))
-    assert logs and logs[0].resource.attributes["service.version"] == s.VERSIONE
+    assert logs and logs[0].resource.attributes["service.version"] == tracce.VERSIONE
 
 
 def test_il_cruscotto_confronta_le_versioni():
-    pannelli = json.loads((s.QUI / "cruscotto" / "grafana" / "segnali.json").read_text())
+    pannelli = json.loads((QUI / "cruscotto" / "grafana" / "segnali.json").read_text())
     query = [t["query"] for p in pannelli["panels"] for t in p.get("targets", [])]
     assert all('span.banco.cartella =~ "$cartella"' in q for q in query)  # variabile multi-valore: regex, non uguaglianza
     v = pannelli["templating"]["list"][0]
