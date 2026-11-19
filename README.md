@@ -21,15 +21,25 @@ vere con Claude Haiku 5.5 (`claude-haiku-5-5`).
 ## Provalo in due minuti
 
 Le run si rigiocano senza chiamare l'API: il replay mostra solo quello che lo strato di quella run aveva catturato.
+Serve Python 3.14.
+
+```bash
+make installa    # crea .venv con le versioni bloccate di requirements.txt e il comando strati
+make giulia      # rigioca la richiesta di Giulia mostrata nel talk
+make             # tutti i comandi
+```
+
+Senza `make`:
 
 ```bash
 python3.14 -m venv .venv
-.venv/bin/pip install -r requirements.txt -e .    # versioni bloccate in requirements.txt
+.venv/bin/pip install -r requirements.txt -e '.[dev]'
 source .venv/bin/activate
-strati replay registrazioni/strato-5/20261105-202614-guasto.json    # la richiesta di Giulia mostrata nel talk
+strati replay registrazioni/strato-5/20261105-202614-guasto.json
 ```
 
-I comandi qui e nei documenti si danno con l'ambiente attivo (`source .venv/bin/activate`).
+I comandi `strati` qui e nei documenti si danno con l'ambiente attivo (`source .venv/bin/activate`); i target di
+`make` non ne hanno bisogno.
 
 ## La mappa del repo
 
@@ -53,6 +63,7 @@ I comandi qui e nei documenti si danno con l'ambiente attivo (`source .venv/bin/
 | `docs/` | la documentazione; `docs/banco/` ha metodo, numeri, uscite e diciassette-alberi |
 | `tests/` | pytest e il server finto |
 | `pyproject.toml`, `requirements.txt` | pacchetto e dipendenze bloccate |
+| `Makefile` | le scorciatoie per i comandi più comuni (`make` le elenca) |
 | `.env.esempio` | la chiave Anthropic per le run dal vivo |
 
 ## Gli strati
@@ -71,19 +82,21 @@ Ogni strato contiene i precedenti. Le righe che esistono solo per osservare fini
 
 ## I comandi principali
 
-| comando | cosa fa |
-|---|---|
-| `strati replay FILE` | rigioca una registrazione, come allora |
-| `strati run --strato N [--guasto] [--correzione ...]` | una run dal vivo |
-| `strati banco K --strato N ...` | K run, una riga ciascuna |
-| `strati riepilogo` | una riga per cartella e modo |
-| `strati misure N` | come ha deciso il grafo, cosa ha letto e riportato `avvisi`, token per agente |
-| `strati schema CARTELLA` | il grafo delle chiamate in testo e Mermaid |
-| `strati segnali [CARTELLE]` | i cinque segnali dai soli span |
-| `strati righe`, `strati codice N` | conteggio e codice per le slide |
-| `strati controllo stima`, `run`, `confronta` | il banco breve della settimana del talk |
-| `strati cruscotto invia`, `verifica` | manda le registrazioni e controlla il cruscotto |
-| `pytest -q` | i test, senza rete e sul server finto (prima `pip install -e '.[dev]'`) |
+Le scorciatoie del `Makefile` coprono i casi più comuni; i parametri si passano come variabili (`make misure N=3`).
+
+| `make` | comando `strati` | cosa fa |
+|---|---|---|
+| `make giulia`, `make replay F=...` | `strati replay F` | rigioca una registrazione, come allora |
+| `make riepilogo` | `strati riepilogo` | una riga per cartella e modo |
+| `make misure N=5` | `strati misure N` | come ha deciso il grafo, cosa ha letto e riportato `avvisi`, token per agente |
+| `make schema` | `strati schema CARTELLA [--modo M] [--senza-strumenti]` | il grafo delle chiamate in testo e Mermaid |
+| `make segnali` | `strati segnali [CARTELLE]` | i cinque segnali dai soli span |
+| `make righe`, `make codice N=2` | `strati righe`, `strati codice N` | conteggio e codice per le slide |
+| `make cruscotto-su`, `make invia`, `make verifica` | `strati cruscotto invia`, `verifica` | accende il cruscotto, manda le registrazioni, controlla i numeri |
+| `make run N=3` | `strati run --strato N [--guasto] [--correzione ...]` | una run dal vivo (serve la chiave in `.env`) |
+| | `strati banco K --strato N ...` | K run dal vivo, una riga ciascuna |
+| `make stima` | `strati controllo stima`, `run N`, `confronta C` | il banco breve della settimana del talk |
+| `make test`, `make lint` | `pytest -q`, `ruff check .` | i test senza rete sul server finto, e il lint |
 
 ## Dove leggere il resto
 
