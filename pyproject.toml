@@ -17,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "httpx2"]
 
+[project.scripts]
+strati = "osservare_a_strati.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

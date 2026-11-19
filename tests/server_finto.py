@@ -9,9 +9,114 @@ from pathlib import Path
 
 import httpx2 as httpx
 
-import segnali as sg
-import strati as s
+from osservare_a_strati import esecuzione as _esecuzione
+from osservare_a_strati import modello as _modello
+from osservare_a_strati import registrazioni as _registrazioni
+from osservare_a_strati import righe as _righe
+from osservare_a_strati import stampa as _stampa
+from osservare_a_strati import valutazione as _valutazione
+from osservare_a_strati.agenti import ciclo as _ciclo
+from osservare_a_strati.agenti import prompt as _prompt
+from osservare_a_strati.agenti import strumenti as _strumenti
+from osservare_a_strati.analisi import misure as _misure
+from osservare_a_strati.analisi import schema as _schema
+from osservare_a_strati.analisi import segnali as _segnali
+from osservare_a_strati.analisi import span as _span
+from osservare_a_strati.evento import avvisi as _avvisi
+from osservare_a_strati.evento import dati as _dati
 from osservare_a_strati.impostazioni import con
+from osservare_a_strati.osservabilita import client as _client
+from osservare_a_strati.osservabilita import log as _oslog
+from osservare_a_strati.osservabilita import tracce as _tracce
+from osservare_a_strati.osservabilita.riassunto import RiassuntoSullaRadice as _RiassuntoSullaRadice
+
+_QUI = Path(__file__).resolve().parent.parent
+
+_MAPPA_S = {
+    "__file__": (_esecuzione, "__file__"),
+    "_provider_log": (_oslog, "_provider_log"),
+    "_trova": (_dati, "_trova"),
+    "agenti_strumento": (_prompt, "agenti_strumento"),
+    "approva": (_valutazione, "approva"),
+    "archi": (_span, "archi"),
+    "attr": (_span, "attr"),
+    "avvisi": (_avvisi, "avvisi"),
+    "AVVISI_AGGIORNATI": (_dati, "AVVISI_AGGIORNATI"),
+    "AVVISI_PER_PAGINA": (_avvisi, "AVVISI_PER_PAGINA"),
+    "AVVISO_CHIAVE": (_avvisi, "AVVISO_CHIAVE"),
+    "CATENA": (_ciclo, "CATENA"),
+    "chiamate_dagli_span": (_span, "chiamate_dagli_span"),
+    "classe_domanda": (_valutazione, "classe_domanda"),
+    "cliente": (_client, "cliente"),
+    "codice": (_righe, "codice"),
+    "con_email": (_stampa, "con_email"),
+    "concludi_banco": (_esecuzione, "concludi_banco"),
+    "controlla_catena": (_ciclo, "controlla_catena"),
+    "CORREZIONE_DIALOGO": (_prompt, "CORREZIONE_DIALOGO"),
+    "costo": (_modello, "costo"),
+    "costo_per_agente": (_span, "costo_per_agente"),
+    "DOMANDA": (_dati, "DOMANDA"),
+    "domande_ad_avvisi": (_span, "domande_ad_avvisi"),
+    "EMAIL": (_tracce, "EMAIL"),
+    "esegui": (_esecuzione, "esegui"),
+    "esegui_banco": (_esecuzione, "esegui_banco"),
+    "esegui_chiamate": (_ciclo, "esegui_chiamate"),
+    "ESITI": (_valutazione, "ESITI"),
+    "esito": (_misure, "esito"),
+    "grafo": (_span, "grafo"),
+    "ID_ACCOUNT": (_registrazioni, "ID_ACCOUNT"),
+    "in_dict": (_registrazioni, "in_dict"),
+    "ISTRUZIONI": (_prompt, "ISTRUZIONI"),
+    "istruzioni_coordina": (_prompt, "istruzioni_coordina"),
+    "leggi_dato": (_strumenti, "leggi_dato"),
+    "LOG": (_oslog, "LOG"),
+    "memoria": (_tracce, "memoria"),
+    "misura": (_misure, "misura"),
+    "misure": (_misure, "misure"),
+    "MODEL": (_modello, "MODEL"),
+    "mostra": (_stampa, "mostra"),
+    "mostra_schema": (_schema, "mostra_schema"),
+    "PAGINA_AVVISO": (_avvisi, "PAGINA_AVVISO"),
+    "PAGINE_PIENA": (_avvisi, "PAGINE_PIENA"),
+    "PAGINE_TRANQUILLA": (_avvisi, "PAGINE_TRANQUILLA"),
+    "PROGRAMMA": (_dati, "PROGRAMMA"),
+    "quota_riletture": (_span, "quota_riletture"),
+    "riepilogo": (_misure, "riepilogo"),
+    "righe": (_righe, "righe"),
+    "riporta_avviso": (_valutazione, "riporta_avviso"),
+    "schema": (_schema, "schema"),
+    "schemi": (_prompt, "schemi"),
+    "url_log": (_oslog, "url_log"),
+    "valuta": (_valutazione, "valuta"),
+    "VERSIONE": (_tracce, "VERSIONE"),
+    "versione_prompt": (_prompt, "versione_prompt"),
+}
+
+
+class _S:
+    """I nomi che i test usano come `s.`: ogni lettura va al modulo che li possiede, al momento dell'uso."""
+
+    def __getattr__(self, nome):
+        if nome == "QUI":
+            return _QUI
+        try:
+            modulo, campo = _MAPPA_S[nome]
+        except KeyError:
+            raise AttributeError(f"module {__name__!r} has no attribute {nome!r}") from None
+        return getattr(modulo, campo)
+
+
+class _SG:
+    """I nomi di `sg.`: i segnali e il riassunto sulla radice."""
+
+    def __getattr__(self, nome):
+        if nome == "RiassuntoSullaRadice":
+            return _RiassuntoSullaRadice
+        return getattr(_segnali, nome)
+
+
+s = _S()
+sg = _SG()
 
 CARTELLA = Path(tempfile.mkdtemp())
 INTESTAZIONI = {"request-id": "req_finto", "anthropic-organization-id": "org-finta", "anthropic-workspace-id": "wrk-finto"}

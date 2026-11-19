@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 
 from ..analisi import segnali as sg
-from . import invio as tempo
+from . import invio
 
 TEMPO = "http://localhost:3210"
 RADICE = Path(__file__).resolve().parents[2]
@@ -101,7 +101,7 @@ def versioni_da_segnali(regs: list[dict]) -> dict:
     """Come il pannello delle versioni, dalle registrazioni: la modalita' e l'hash sono quelli che invio scrive sulla radice."""
     gruppi = {}
     for r in regs:
-        v, g = tempo.versione_della_registrazione(r), sg.segnali(r)
+        v, g = invio.versione_della_registrazione(r), sg.segnali(r)
         gruppi.setdefault(v["correzione"], []).append({
             "richiesta.versione_prompt": v["prompt"], "richiesta.costo_microusd": round(g["costo"] * 1e6),
             "richiesta.quota_avvisi_pct": round(g["quota_avvisi"] * 100),
@@ -127,4 +127,4 @@ def verifica(cartelle: list[Path]) -> int:
                 sbagliati += not ok
                 print(f"{nome:<28} {modo:<6} {k:<10} {'uguale' if ok else 'DIVERSO'}  segnali {atteso[k]}"
                       + ("" if ok else f"  cruscotto {visto[k]}"))
-    return 1 if sbagliati else 0
+    return sbagliati
