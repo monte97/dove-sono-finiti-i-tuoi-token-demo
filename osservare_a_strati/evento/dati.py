@@ -25,5 +25,5 @@ def _trova(tabella: dict, chiave: str):
 
 def sala_normale(testo: str) -> str:
     """«B», « b », «sala B», «Sala B.» sono la stessa sala: toglie «sala» davanti, punteggiatura e spazi, e maiuscola."""
-    t = re.sub(r"^\s*sala\b", "", str(testo), flags=re.I)
+    t = re.sub(r"^\s*sala\b", "", str(testo), flags=re.IGNORECASE)
     return re.sub(r"[^\w]", "", t).upper()

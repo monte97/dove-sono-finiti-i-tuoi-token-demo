@@ -7,7 +7,7 @@ from .impostazioni import TITOLI
 
 RADICE = Path(__file__).resolve().parent
 
-# I file con marcatori, nell'ordine in cui le loro sezioni comparivano in strati.py.
+# I file con marcatori, nell'ordine in cui le loro sezioni comparivano nel file unico di partenza.
 ORDINE: tuple[str, ...] = (
     "osservabilita/log.py",
     "osservabilita/tracce.py",

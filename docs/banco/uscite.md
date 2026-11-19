@@ -1,8 +1,8 @@
 # Uscite del banco del 5/11 con le misure corrette
 
-Prodotte dal commit `45f799d` (ramo `rami-paralleli`) sulle registrazioni di `registrazioni/`, senza modificarle e senza chiamare l'API. Ogni blocco e' l'uscita del comando scritto sopra, senza ritocchi salvo togliere i codici colore del terminale. `--misure N` legge tutte le cartelle `strato-N*`: `--misure 5` comprende anche le tre correzioni (`strato-5-correzione`, `-completa`, `-dialogo`). Gli schemi sono rientrati di quattro spazi per non far interpretare il blocco Mermaid.
+Prodotte dal commit `45f799d` (ramo `rami-paralleli`) sulle registrazioni di `registrazioni/`, senza modificarle e senza chiamare l'API. I comandi allora erano `strati.py --misure N` e simili; qui sono scritti con la CLI di oggi (`strati misure N`), che dà la stessa uscita. Ogni blocco e' l'uscita del comando scritto sopra, senza ritocchi salvo togliere i codici colore del terminale. `strati misure N` legge tutte le cartelle `strato-N*`: `strati misure 5` comprende anche le tre correzioni (`strato-5-correzione`, `-completa`, `-dialogo`). Gli schemi sono rientrati di quattro spazi per non far interpretare il blocco Mermaid.
 
-## `.venv/bin/python strati.py --riepilogo`
+## `strati riepilogo`
 
 ```
 cartella                     modo     n trace span attr chiam. giuste avvis. sbagl. email sec med token med     $ med
@@ -25,7 +25,7 @@ strato-5-correzione-dialogo  guasto  30     1   72 1234     33      2     28    
 speso in tutto, dalle registrazioni: $ 2.2118
 ```
 
-## `.venv/bin/python strati.py --misure 0`
+## `strati misure 0`
 
 ```
  strato-0 
@@ -66,7 +66,7 @@ sana: n 30 · giusta 30 · avvisata 0 · sbagliata 0
 
 ```
 
-## `.venv/bin/python strati.py --misure 1`
+## `strati misure 1`
 
 ```
  strato-1 
@@ -107,7 +107,7 @@ sana: n 30 · giusta 30 · avvisata 0 · sbagliata 0
 
 ```
 
-## `.venv/bin/python strati.py --misure 2`
+## `strati misure 2`
 
 ```
  strato-2 
@@ -186,7 +186,7 @@ sana: n 30 · giusta 30 · avvisata 0 · sbagliata 0
 
 ```
 
-## `.venv/bin/python strati.py --misure 3`
+## `strati misure 3`
 
 ```
  strato-3 
@@ -270,7 +270,7 @@ sana: n 30 · giusta 30 · avvisata 0 · sbagliata 0
 
 ```
 
-## `.venv/bin/python strati.py --misure 4`
+## `strati misure 4`
 
 ```
  strato-4 
@@ -364,7 +364,7 @@ sana: n 30 · giusta 30 · avvisata 0 · sbagliata 0
 
 ```
 
-## `.venv/bin/python strati.py --misure 5`
+## `strati misure 5`
 
 ```
  strato-5 
@@ -588,7 +588,7 @@ guasto: n 30 · giusta 2 · avvisata 28 · sbagliata 0
 
 ```
 
-## `.venv/bin/python segnali.py`
+## `strati segnali`
 
 ```
 strato-0 · guasto · 30 richieste
@@ -698,7 +698,7 @@ strato-5-correzione-dialogo · guasto · 30 richieste
 
 ```
 
-## `.venv/bin/python strati.py --schema registrazioni/strato-5 --modo guasto`
+## `strati schema registrazioni/strato-5 --modo guasto`
 
     schema del sistema: 30 run, strato 5
     
@@ -748,7 +748,7 @@ strato-5-correzione-dialogo · guasto · 30 richieste
       linkStyle 2 stroke:#c0392b,stroke-width:3px,color:#c0392b
     ```
 
-## `.venv/bin/python strati.py --schema registrazioni/strato-5-correzione-dialogo --modo guasto`
+## `strati schema registrazioni/strato-5-correzione-dialogo --modo guasto`
 
     schema del sistema: 30 run, strato 5
     

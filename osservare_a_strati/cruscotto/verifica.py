@@ -1,4 +1,4 @@
-"""Esegue su Tempo le query del cruscotto e confronta ogni numero con segnali.py.
+"""Esegue su Tempo le query del cruscotto e confronta ogni numero con i segnali di `strati segnali`.
 
 Le query si leggono da cruscotto/grafana/segnali.json, per refId: cosi' si verifica il cruscotto che si mostra,
 non una sua copia. Serve lo stack acceso (docker compose -f cruscotto/compose.yaml up -d) e i dati di invio.

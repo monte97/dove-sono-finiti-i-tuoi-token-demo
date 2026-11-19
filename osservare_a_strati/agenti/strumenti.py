@@ -8,6 +8,7 @@ from ..evento.dati import AVVISI_AGGIORNATI, PROGRAMMA, PUBBLICATO, SALE, SESSIO
 from ..impostazioni import attuali
 from ..osservabilita.log import LOG
 
+
 # Attributi inventati, con prefisso proprio (le convenzioni semantiche non li coprono):
 #   programma.pubblicato_il   quando e' stato pubblicato il programma letto
 #   sale.fonte                da dove viene il dato sulle sale
@@ -17,7 +18,7 @@ from ..osservabilita.log import LOG
 #   avvisi.aggiornati_alle    ora dell'ultimo aggiornamento della bacheca
 #   richiesta.correzione      sulla radice: nessuna | istruzioni | filtro | dialogo
 #   richiesta.versione_prompt sulla radice: hash corto delle istruzioni e delle descrizioni degli strumenti in uso
-# (gli altri richiesta.*, i riassunti per richiesta del cruscotto, sono dichiarati in segnali.py)
+# (gli altri richiesta.*, i riassunti per richiesta del cruscotto, sono dichiarati nel modulo analisi.segnali)
 def leggi_dato(nome: str, argomenti: dict, stato: dict) -> str:
     """Lo strumento che legge un dato. Niente e' rotto: ognuno risponde correttamente a cio' che gli si chiede."""
     if nome == "leggi_programma":

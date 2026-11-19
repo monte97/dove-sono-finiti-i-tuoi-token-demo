@@ -34,7 +34,7 @@ RISORSA = tracce.RISORSA
 def versione_della_registrazione(r: dict) -> dict:
     """La versione di una registrazione: quella scritta nel campo `versione` se c'e'; altrimenti, per le registrazioni
     vecchie (il banco del 5/11), derivata dalla modalita' di correzione e dalle istruzioni di adesso. Vale perche' le
-    istruzioni non sono cambiate dopo il banco: test_strati.py fissa gli hash per modalita'."""
+    istruzioni non sono cambiate dopo il banco: i test (tests/server_finto.py, HASH_BANCO) fissano gli hash per modalita'."""
     return r.get("versione") or versione(r.get("correzione", 0))
 
 

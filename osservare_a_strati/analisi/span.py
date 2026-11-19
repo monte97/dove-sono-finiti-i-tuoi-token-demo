@@ -211,8 +211,9 @@ def token_per_agente(span) -> dict:
 def chiamate_dagli_span(span) -> list[dict]:
     """Le chiamate al modello ricostruite dagli span, dallo strato 2 in su, in ordine di fine: l'agente e il suo
     invoke_agent (lo span corrente quando la riga di log parte), la fine e il conto con i nomi del provider. Servono a
-    tempo.py: le registrazioni del banco del 5/11 sono di prima delle righe per chiamata e delle metriche, e righe e
-    misure si rifanno da qui, con le cifre di quella run. L'SDK scrive gen_ai.usage.input_tokens con la cache dentro."""
+    strati cruscotto invia: le registrazioni del banco del 5/11 sono di prima delle righe per chiamata e delle metriche,
+    e righe e misure si rifanno da qui, con le cifre di quella run. L'SDK scrive gen_ai.usage.input_tokens con la cache
+    dentro."""
     per_id, fuori = {x["id"]: x for x in span}, []
     for x in sorted(span, key=lambda x: x["fine"]):
         if (t := token(x)) is None:

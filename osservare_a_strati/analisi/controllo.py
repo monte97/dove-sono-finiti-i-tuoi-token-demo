@@ -5,9 +5,9 @@ controllo rifa' poche run per ogni caso del discorso, in una cartella sua (regis
 mette accanto i numeri che il talk usa. Controlla anche che l'SDK scriva ancora gli span come allo strato 1.
 
 Uso:
-  python controllo.py --stima                      # cosa verrebbe lanciato e quanto costa, senza chiamare l'API
-  python controllo.py --run 10                     # 10 run per caso in controllo/AAAA-MM-GG/, poi il confronto
-  python controllo.py --confronta controllo/2026-11-24   # solo il confronto, su run gia' fatte
+  strati controllo stima                      # cosa verrebbe lanciato e quanto costa, senza chiamare l'API
+  strati controllo run 10                     # 10 run per caso in controllo/AAAA-MM-GG/, poi il confronto
+  strati controllo confronta controllo/2026-11-24   # solo il confronto, su run gia' fatte
 """
 import collections
 import datetime as dt

@@ -27,7 +27,7 @@ _QUINDICI_SUPERATO = re.compile(
     r"|previst[oae]\s+(?:dal|nel)\s+programma[^.;!?]{0,12}?15:00"  # «previsto dal programma alle 15:00»
     r"|(?:previst[oa]|era)\s+alle\s+15:00\s+nel\s+programma"
     r"|\bin\s+programma\s+(?:era|c'era)\s+(?:alle\s+|le\s+)?15:00"  # «in programma era alle 15:00»: passato, superato
-    r"|15:00 (?:era|erano)\s+l'orario\s+(?:del|in|nel)\s+programma", re.I)
+    r"|15:00 (?:era|erano)\s+l'orario\s+(?:del|in|nel)\s+programma", re.IGNORECASE)
 # Cosa vale come avvertimento: una causa oppure le 14:00 presentate come possibili o probabili. Una causa e' una di due
 # cose, nella stessa frase o clausola, come in riporta_avviso: la sala B chiusa o in manutenzione («sala B» nella frase e
 # chiusura, manutenzione, non disponibile nella clausola), oppure le sessioni pomeridiane portate avanti («un'ora prima»,
@@ -36,9 +36,9 @@ _QUINDICI_SUPERATO = re.compile(
 # «nessun avviso di chiusura», «non risulta che sia chiusa», «nessuna anticipazione prevista», «non alle 14:00».
 # Limite noto: «sala B» in una frase e la chiusura in un'altra («E' in sala B. Chiude alle 15.») non si legano
 # (verso conservativo: sbagliata, non avvisata).
-_CAUSA_SALA = re.compile(r"chius|chiud|manutenzion|\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil|indisponibil", re.I)
-_CAUSA_ANTICIPO = re.compile(r"un.ora prima|anticip", re.I)
-_QUATTORDICI_POSSIBILE = re.compile(r"(?:potrebbe|probabilmente|forse|dovrebbe|magari)[^.;!?]{0,30}?14:00", re.I)
+_CAUSA_SALA = re.compile(r"chius|chiud|manutenzion|\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil|indisponibil", re.IGNORECASE)
+_CAUSA_ANTICIPO = re.compile(r"un.ora prima|anticip", re.IGNORECASE)
+_QUATTORDICI_POSSIBILE = re.compile(r"(?:potrebbe|probabilmente|forse|dovrebbe|magari)[^.;!?]{0,30}?14:00", re.IGNORECASE)
 
 
 def _avverte(risposta: str) -> bool:
@@ -67,7 +67,7 @@ def valuta(risposta: str, modo: str) -> str:
 # virgolette («Verificato. Il workshop...»): il banco del 5/11 ha mostrato che a volte lo scrive prima. Un rifiuto che lo
 # cita («Non aggiungo «Verificato.» perche'...») ha altro prima e altro dopo: non approva. Stessa regola, riga per riga,
 # in verdetti() e nella query del cruscotto (cruscotto/grafana/segnali.json, pannello «valida approva»).
-APPROVA = re.compile(r"[\s\"'«*]*Verificato\..*|.*Verificato\.[\s\"'»*]*", re.S)
+APPROVA = re.compile(r"[\s\"'«*]*Verificato\..*|.*Verificato\.[\s\"'»*]*", re.DOTALL)
 
 
 def approva(testo: str) -> bool:
@@ -76,17 +76,17 @@ def approva(testo: str) -> bool:
     return bool(APPROVA.fullmatch(testo))
 
 
-AVVISI_SALA_B = re.compile(r"sala B", re.I)
+AVVISI_SALA_B = re.compile(r"sala B", re.IGNORECASE)
 # la causa legata alla sala (non «chiusura» da sola: «keynote di chiusura» e' rumore)
 AVVISI_CAUSA = re.compile(r"\bchius[ao]\b|\bchiud\w+|manutenzion|un.ora prima|anticipat|"
-                          r"\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil\w*|indisponibil", re.I)
+                          r"\bnon\s+(?:sar[àa]\s+|è\s+)?disponibil\w*|indisponibil", re.IGNORECASE)
 # una negazione che regge la causa: sta PRIMA e dice che l'avviso o la chiusura non c'e'
 # (qui anche «senza», «né» e «non» + fino a tre parole + un verbo che riporta o trova: «non segnalano», «non ho trovato»,
 # «non parlano di», «non indicano»; «non sarà disponibile» resta una causa, non una negazione)
 AVVISI_NEGA = re.compile(r"\bnessun\w*|\bsenza\b|\bné\b|"
                          r"\bnon\s+(?:\w+\s+){0,3}?(?:segnal|indic|parl|menzion|riport|preved|trov|risult)\w*\s+|"
                          r"\bnon\s+(?:ci\s+sono|c'è|vi\s+è|vi\s+sono|è\s+previst\w+|"
-                         r"sono\s+previst\w+|è|sarà|sono)\s+", re.I)
+                         r"sono\s+previst\w+|è|sarà|sono)\s+", re.IGNORECASE)
 
 
 _CONFINE_CLAUSOLA = re.compile(r"(?i:,\s*ma\b|\s+ma\s+|\bperò\b|\btuttavia\b|:\s|\s[—–]\s|,\s+(?=la sala\b))|,\s+(?=[A-Z])")
@@ -117,7 +117,7 @@ def riporta_avviso(testo: str) -> bool:
 # La domanda che coordina manda ad avvisi (l'argomento `richiesta` dell'arco coordina -> avvisi): nomina orario, sala,
 # variazioni, cambi, chiusura o annullamenti (qui anche manutenzione, anticipo, spostamenti), oppure nomina solo la sessione.
 # Nel banco del 5/11 le avvisate nascono dalle domande della prima classe: avvisi sa cosa cercare solo se glielo dici.
-CHIEDE_VARIAZIONI = re.compile(r"orari|\bsala\b|\bsale\b|variazion|cambi|chius|annull|manutenzion|anticip|spost", re.I)
+CHIEDE_VARIAZIONI = re.compile(r"orari|\bsala\b|\bsale\b|variazion|cambi|chius|annull|manutenzion|anticip|spost", re.IGNORECASE)
 CLASSI_DOMANDA = ("variazioni", "sessione")
 
 

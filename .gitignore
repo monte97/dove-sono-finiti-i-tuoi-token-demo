@@ -1,6 +1,8 @@
 .env
 .venv/
 __pycache__/
+*.egg-info/
+controllo/
 
 # fuori dalla versione pubblica (16/11/2026): restano in locale
 archivio/

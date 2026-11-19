@@ -37,7 +37,7 @@ def esegui(guasto: bool, cartella: Path, client=None) -> dict:
             span.set_attribute("gen_ai.workflow.name", "assistente-evento")  # s2
             span.set_attributes({"richiesta.correzione": NOMI_CORREZIONE[attuali().correzione],  # s2
                                  "richiesta.versione_prompt": versione_prompt()})  # s2
-            if attuali().produzione:  # per filtrare le run del banco nel cruscotto, come fa tempo.py nel replay
+            if attuali().produzione:  # per filtrare le run del banco nel cruscotto, come fa strati cruscotto invia nel replay
                 span.set_attributes({"banco.cartella": cartella.name, "banco.modo": "guasto" if guasto else "sana"})
             # coordina decide chi chiamare, in che ordine e cosa passare
             risposta = agente(client, "coordina", istruzioni_coordina(), DOMANDA, stato, ["programma", "sale", "avvisi", "valida"])

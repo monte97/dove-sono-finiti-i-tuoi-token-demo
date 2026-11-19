@@ -1,6 +1,6 @@
 """Lunedi', in produzione: cinque segnali da cruscotto, calcolati solo dagli span delle registrazioni.
 
-Uso: python segnali.py [CARTELLA ...]   (senza argomenti, tutte le cartelle in registrazioni/)
+Uso: strati segnali [CARTELLA ...]   (senza argomenti, tutte le cartelle in registrazioni/)
 """
 import collections
 import statistics
@@ -32,7 +32,7 @@ def segnali(r: dict) -> dict:
 
 def riassunto(r: dict) -> dict:
     """I fatti per richiesta da scrivere sullo span radice: TraceQL conta span, non trace.
-    Attributi richiesta.* (oltre a correzione e versione_prompt, dichiarati in strati.py): forma, costo_microusd,
+    Attributi richiesta.* (oltre a correzione e versione_prompt, dichiarati in esecuzione.py): forma, costo_microusd,
     quota_avvisi_pct, pagine_avvisi, valida_approva (verdetti che approvano), valida_verdetti (tutti i verdetti)."""
     g, fuori = segnali(r), {}
     if g["forma"] is not None:

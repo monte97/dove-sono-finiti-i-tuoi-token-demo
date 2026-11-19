@@ -8,9 +8,29 @@ from ..modello import costo
 from ..osservabilita.tracce import EMAIL
 from ..stampa import c, con_email
 from ..valutazione import AVVISI_SALA_B, CLASSI_DOMANDA, ESITI, classe_domanda, riporta_avviso, valuta
-from .span import (archi, attr, avvisi_dopo_sala, cicli, costo_per_agente, dialogo, dialogo_riporta, domande_ad_avvisi,
-                   grafo, in_ordine, pagine_avvisi, pagine_ricontrolli, per_trace, profondita_agenti, quota_avvisi,
-                   quota_riletture, sale_da_due, stesso_giro, strumenti, token_per_agente, verdetti)
+from .span import (
+    archi,
+    attr,
+    avvisi_dopo_sala,
+    cicli,
+    costo_per_agente,
+    dialogo,
+    dialogo_riporta,
+    domande_ad_avvisi,
+    grafo,
+    in_ordine,
+    pagine_avvisi,
+    pagine_ricontrolli,
+    per_trace,
+    profondita_agenti,
+    quota_avvisi,
+    quota_riletture,
+    sale_da_due,
+    stesso_giro,
+    strumenti,
+    token_per_agente,
+    verdetti,
+)
 
 
 def esito(r: dict) -> dict:
@@ -41,8 +61,8 @@ def riepilogo(cartella: Path):
     print(f"{'cartella':<28} {'modo':6} {'n':>3} {'trace':>5} {'span':>4} {'attr':>4} {'chiam.':>6} "
           f"{'giuste':>6} {'avvis.':>6} {'sbagl.':>6} {'email':>5} {'sec med':>7} {'token med':>9} {'$ med':>9}")
     for (cartella_, modo), ee in sorted(gruppi.items()):
-        conta = lambda k: sum(e["esito"] == k for e in ee) if k in ESITI else sum(e[k] for e in ee)
-        med = lambda k: statistics.median(e[k] for e in ee)
+        conta = lambda k, ee=ee: sum(e["esito"] == k for e in ee) if k in ESITI else sum(e[k] for e in ee)
+        med = lambda k, ee=ee: statistics.median(e[k] for e in ee)
         print(f"{cartella_:<28} {modo:6} {len(ee):>3} {med('tracce'):>5.0f} {med('span'):>4.0f} "
               f"{med('attributi'):>4.0f} {med('chiamate'):>6.0f} {conta('giusta'):>6} {conta('avvisata'):>6} {conta('sbagliata'):>6} "
               f"{med('email'):>5.0f} {med('secondi'):>7.1f} {med('token'):>9.0f} {med('costo'):>9.6f}")
@@ -58,7 +78,7 @@ MINIMO_MISURE = {"stesso_giro": 2, "dopo_sala": 2, "token": 2, "letto": 3, "ripo
 def misura(r: dict) -> dict:
     """Cosa e' successo in una run: il grafo, cosa ha letto e riportato avvisi, i verdetti di valida, i token per agente.
     None dove gli span che servono non esistono a quello strato."""
-    span, risposta, strato = r["span"], r["risposta"] or "", r["strato"]
+    span, strato = r["span"], r["strato"]
     se = lambda nome, valore: valore() if strato >= MINIMO_MISURE[nome] else None
     livelli = [lv for _, lv in in_ordine(span)]
     avvisi_tool, a_avvisi = strumenti(span, "leggi_avvisi"), archi(span, ("avvisi",), da="coordina")
@@ -96,8 +116,8 @@ def tabella_domande(mm: list[dict]) -> list[str]:
     """La tabella incrociata «domanda di coordina ad avvisi × esito», sulla prima domanda di ogni run (quella dei rami
     paralleli, quando coordina non sa ancora la sala), e per ogni classe quante volte avvisi riporta l'avviso a coordina
     (nella prima risposta e in qualunque giro)."""
-    righe = [f"  {'domanda di coordina ad avvisi × esito':<50} {'n':>3} {'giusta':>7} {'avvisata':>9} {'sbagliata':>10}"
-             f" {'avvisi riporta (1° giro)':>25} {'(qualunque giro)':>17}"]
+    righe = [(f"  {'domanda di coordina ad avvisi × esito':<50} {'n':>3} {'giusta':>7} {'avvisata':>9} {'sbagliata':>10}"
+              f" {'avvisi riporta (1° giro)':>25} {'(qualunque giro)':>17}")]
     for classe in CLASSI_DOMANDA + (None,):
         gruppo = [m for m in mm if m["classe_domanda"] == classe]
         if not gruppo:
@@ -121,9 +141,9 @@ def misure(cartelle: list[Path]):
             if not mm:
                 continue
             n, strato = len(mm), regs[0]["strato"]
-            med = lambda k: statistics.median(m[k] for m in mm)
+            med = lambda k, mm=mm: statistics.median(m[k] for m in mm)
 
-            def conta(k, minimo, etichetta):  # quante run su n; se lo strato non basta lo dice
+            def conta(k, minimo, etichetta, mm=mm, n=n):  # quante run su n; se lo strato non basta lo dice
                 if any(m[k] is None for m in mm):
                     return f"  {etichetta:<52} serve lo strato {minimo}"
                 return f"  {etichetta:<52} {sum(bool(m[k]) for m in mm):>2} su {n}"

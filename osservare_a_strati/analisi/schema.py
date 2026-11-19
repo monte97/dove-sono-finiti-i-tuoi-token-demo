@@ -90,8 +90,8 @@ def schema(regs: list[dict], senza_strumenti: bool = False) -> tuple[str, str]:
         media = round(volte / run, 1)
         return f"{run}/{n}" + (f" ×{media:.1f}" if media > 1 else "")
     mm = ["flowchart LR", "  %% legenda: ogni arco e' «in quante run su quante» (×N = volte per run, in media);",
-          "  %% tratteggiato = chi controlla o chiede a una fonte fuori dal giro di coordina (valida che richiama, avvisi che "
-          "chiede a programma, arco respinto dalla guardia); rosso = coordina → sale quando sale e' chiamato anche da programma"]
+          ("  %% tratteggiato = chi controlla o chiede a una fonte fuori dal giro di coordina (valida che richiama, avvisi che "
+           "chiede a programma, arco respinto dalla guardia); rosso = coordina → sale quando sale e' chiamato anche da programma")]
     nodi = sorted(agenti, key=_ordine)
     mm.append("  utente([utente])")
     mm += [f"  {a}[{a}]" for a in nodi]
