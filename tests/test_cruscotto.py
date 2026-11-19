@@ -34,7 +34,7 @@ def test_stampa_dice_cosa_manca():
 
 
 def test_in_otlp():
-    import tempo
+    from osservare_a_strati.cruscotto import invio as tempo
     reg = run()
     spans = tempo.in_otlp(reg, "strato-5", adesso=2_000_000_000.0)
     assert len(spans) == len(reg["span"]) and len({x.context.trace_id for x in spans}) == 1
@@ -50,7 +50,7 @@ def test_in_otlp():
 
 
 def test_log_in_otlp_con_gli_id_degli_span():
-    import tempo
+    from osservare_a_strati.cruscotto import invio as tempo
     reg = run()
     tool = [x for x in reg["span"] if x["nome"].startswith("execute_tool")]
     reg["log_otel"] = [{"trace": x["trace"], "span": x["id"], "livello": "INFO", "testo": f"{x['nome']}: riga {i}"}
@@ -73,7 +73,7 @@ def test_log_in_otlp_con_gli_id_degli_span():
 
 
 def test_log_in_otlp_usa_l_orario_registrato():
-    import tempo
+    from osservare_a_strati.cruscotto import invio as tempo
     reg = run()
     x = next(x for x in reg["span"] if x["nome"].startswith("execute_tool"))
     meta = (x["inizio"] + x["fine"]) / 2
@@ -110,7 +110,7 @@ def test_la_query_del_cruscotto_approva_come_approva():
 
 
 def test_tempo_deriva_la_versione_dalle_registrazioni_vecchie():
-    import tempo
+    from osservare_a_strati.cruscotto import invio as tempo
     reg = run()  # senza il campo `versione`, correzione 0
     for correzione, nome in ((0, "nessuna"), (1, "istruzioni"), (2, "filtro"), (3, "dialogo")):
         spans = tempo.in_otlp({**reg, "correzione": correzione}, "strato-5", adesso=2_000_000_000.0)

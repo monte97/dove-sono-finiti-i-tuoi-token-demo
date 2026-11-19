@@ -1,10 +1,9 @@
 """Rete di sicurezza del riordino: scrive su file le uscite della demo, controllo per controllo.
 
-Uso: python tests/riferimento.py --adattatore vecchio|nuovo USCITA_DIR
+Uso: python tests/riferimento.py --adattatore nuovo USCITA_DIR
 
-L'adattatore `vecchio` importa strati, segnali e tempo dalla radice del repo. L'adattatore `nuovo` importa dal
-pacchetto osservare_a_strati (arriva con i Task 3-7); finche' non c'e', solleva NotImplementedError. Il codice dei
-controlli e' unico: cambia solo il dizionario di funzioni che ogni adattatore fornisce.
+L'adattatore importa dal pacchetto osservare_a_strati. Il codice dei controlli e' unico: cambia solo il dizionario
+di funzioni che l'adattatore fornisce.
 """
 import argparse
 import contextlib
@@ -52,22 +51,24 @@ def scrivi(uscita: Path, relativo: str, testo: str):
     percorso.write_text(testo)
 
 
-# --- gli adattatori: un dizionario di funzioni con gli stessi nomi per vecchio e nuovo ---
+# --- l'adattatore: un dizionario di funzioni che i controlli usano senza sapere da dove vengono ---
 
-def adattatore_vecchio() -> dict:
-    import segnali
-    import strati
-    import tempo
+def adattatore_nuovo() -> dict:
+    from osservare_a_strati import righe as righe_mod
+    from osservare_a_strati.agenti import prompt
+    from osservare_a_strati.analisi import misure, schema, segnali
+    from osservare_a_strati.cruscotto import invio
     from osservare_a_strati.impostazioni import Impostazioni, imposta
     from osservare_a_strati.osservabilita import metriche, tracce
+    from osservare_a_strati.stampa import mostra
 
     def fissa_risorsa():
         # La Resource di oggi prende un service.instance.id casuale a ogni processo: l'harness lo fissa, il codice no.
         from opentelemetry.sdk.resources import Resource
-        risorsa = Resource.create({"service.name": "osservare-a-strati", "service.version": strati.VERSIONE,
+        risorsa = Resource.create({"service.name": "osservare-a-strati", "service.version": tracce.VERSIONE,
                                    "service.instance.id": "00000000-0000-0000-0000-000000000000"})
         tracce.RISORSA = risorsa
-        tempo.RISORSA = risorsa
+        invio.RISORSA = risorsa
 
     def prepara_metriche():
         imposta(Impostazioni(strato=5, otlp=None))  # l'harness puo' toccare le impostazioni; il codice della demo no
@@ -78,31 +79,25 @@ def adattatore_vecchio() -> dict:
 
     return {
         "fissa_risorsa": fissa_risorsa,
-        "mostra": strati.mostra,
-        "riepilogo": strati.riepilogo,
-        "misure": strati.misure,
-        "mostra_schema": strati.mostra_schema,
-        "righe": strati.righe,
-        "codice": strati.codice,
-        "versione_prompt": strati.versione_prompt,
-        "versione": strati.versione,
+        "mostra": mostra,
+        "riepilogo": misure.riepilogo,
+        "misure": misure.misure,
+        "mostra_schema": schema.mostra_schema,
+        "righe": righe_mod.righe,
+        "codice": righe_mod.codice,
+        "versione_prompt": prompt.versione_prompt,
+        "versione": prompt.versione,
         "segnali_cruscotto": segnali.cruscotto,
         "segnali_stampa": segnali.stampa,
-        "rimappa": tempo.rimappa,
-        "in_otlp": tempo.in_otlp,
-        "log_in_otlp": tempo.log_in_otlp,
-        "righe_ricostruite": tempo.righe_ricostruite,
-        "misura": tempo.misura,
+        "rimappa": invio.rimappa,
+        "in_otlp": invio.in_otlp,
+        "log_in_otlp": invio.log_in_otlp,
+        "righe_ricostruite": invio.righe_ricostruite,
+        "misura": invio.misura,
         "prepara_metriche": prepara_metriche,
         "forza_metriche": forza_metriche,
-        "leggi_metriche": strati.leggi_metriche,
+        "leggi_metriche": metriche.leggi_metriche,
     }
-
-
-def adattatore_nuovo() -> dict:
-    raise NotImplementedError(
-        "adattatore nuovo: il pacchetto osservare_a_strati arriva con i Task 3-7; "
-        "per ora il riferimento si genera solo con --adattatore vecchio")
 
 
 # --- i controlli, uguali per tutti gli adattatori ---
@@ -198,7 +193,7 @@ def controlli(ad: dict, uscita: Path) -> dict:
     }
 
 
-ADATTATORI = {"vecchio": adattatore_vecchio, "nuovo": adattatore_nuovo}
+ADATTATORI = {"nuovo": adattatore_nuovo}
 
 
 def main() -> int:

@@ -1,11 +1,10 @@
 """Rimanda le registrazioni (span, log correlati e metriche) al collector, con id nuovi e orari spostati ad adesso, per il cruscotto.
 
 Le registrazioni del banco del 5/11 sono di prima delle righe di log per chiamata e delle metriche: righe e misure si
-rifanno dagli span della stessa run (strati.chiamate_dagli_span), con le cifre di quella run.
+rifanno dagli span della stessa run (analisi.span.chiamate_dagli_span), con le cifre di quella run.
 
-Uso: python tempo.py [--otlp URL] CARTELLA ...
+Uso: strati cruscotto invia [--otlp URL] [--tempo URL] [--ancora] CARTELLA ...
 """
-import argparse
 import hashlib
 import json
 import random
@@ -20,10 +19,13 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.trace import NonRecordingSpan, SpanContext, Status, StatusCode, TraceFlags, set_span_in_context
 
-import segnali as sg
-import strati
-from osservare_a_strati.impostazioni import Impostazioni, imposta
-from osservare_a_strati.osservabilita import metriche, tracce
+from ..agenti.prompt import versione
+from ..analisi import segnali as sg
+from ..analisi.span import chiamate_dagli_span
+from ..impostazioni import Impostazioni, imposta
+from ..modello import MODEL
+from ..osservabilita import metriche, tracce
+from ..osservabilita.log import url_log
 
 # La stessa Resource delle run dal vivo (servizio e versione): su span e su log.
 RISORSA = tracce.RISORSA
@@ -33,7 +35,7 @@ def versione_della_registrazione(r: dict) -> dict:
     """La versione di una registrazione: quella scritta nel campo `versione` se c'e'; altrimenti, per le registrazioni
     vecchie (il banco del 5/11), derivata dalla modalita' di correzione e dalle istruzioni di adesso. Vale perche' le
     istruzioni non sono cambiate dopo il banco: test_strati.py fissa gli hash per modalita'."""
-    return r.get("versione") or strati.versione(r.get("correzione", 0))
+    return r.get("versione") or versione(r.get("correzione", 0))
 
 
 def rimappa(r: dict, adesso: float) -> dict:
@@ -89,7 +91,7 @@ def righe_ricostruite(r: dict) -> list[dict]:
     richiesta = r.get("richiesta") or hashlib.sha1(r["span"][0]["trace"].encode()).hexdigest()[:8]
     return [{"trace": ch["trace"], "span": ch["span"], "livello": "INFO", "testo": "chiamata al modello",
              "tempo": ch["fine"], "campi": {"richiesta": richiesta, **ch["campi"]}}
-            for ch in strati.chiamate_dagli_span(r["span"])]
+            for ch in chiamate_dagli_span(r["span"])]
 
 
 def contesto_di(mappa: dict, traccia: str, span_id: str):
@@ -100,12 +102,12 @@ def contesto_di(mappa: dict, traccia: str, span_id: str):
 
 def misura(r: dict, mappa: dict, cartella: str):
     """Le metriche della run come le misura lo strato 1: i contatori per chiamata dentro l'invoke_agent di chi chiama,
-    l'istogramma per agente dentro la radice. Gli strumenti sono quelli di strati.fai_metriche."""
+    l'istogramma per agente dentro la radice. Gli strumenti sono quelli di metriche.fai_metriche."""
     banco, per_agente = {"banco.cartella": cartella, "banco.modo": r["modo"]}, {}
-    for ch in strati.chiamate_dagli_span(r["span"]):
+    for ch in chiamate_dagli_span(r["span"]):
         k = ch["campi"]
         attributi = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "anthropic", "gen_ai.token.modality": "text",
-                     "gen_ai.request.model": strati.MODEL, "gen_ai.response.model": k["gen_ai.response.model"],
+                     "gen_ai.request.model": MODEL, "gen_ai.response.model": k["gen_ai.response.model"],
                      "gen_ai.agent.name": ch["agente"], **banco}
         ingresso = k["gen_ai.usage.input_tokens"]  # con la cache dentro, come nelle convenzioni
         contesto = contesto_di(mappa, ch["trace"], ch["span"])
@@ -159,22 +161,17 @@ def cerca_in_tempo(tempo: str):
     return cerca
 
 
-if __name__ == "__main__":
+def invia(cartelle: list[Path], otlp: str, tempo: str, ancora: bool) -> None:
+    """Rimanda le registrazioni delle cartelle al collector: span, log e metriche, con gli orari spostati ad adesso."""
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--otlp", default="http://localhost:4418/v1/traces")
-    p.add_argument("--tempo", default="http://localhost:3210", help="per controllare cosa c'e' gia'")
-    p.add_argument("--ancora", action="store_true", help="rimanda anche se la cartella e' gia' in Tempo nell'ultima ora")
-    p.add_argument("cartelle", nargs="+", type=Path)
-    a = p.parse_args()
-    esporta, esporta_log = OTLPSpanExporter(endpoint=a.otlp), OTLPLogExporter(endpoint=strati.url_log(a.otlp))
-    imposta(Impostazioni(strato=5, otlp=a.otlp))  # gli strumenti delle metriche, con l'esportazione al collector
+    esporta, esporta_log = OTLPSpanExporter(endpoint=otlp), OTLPLogExporter(endpoint=url_log(otlp))
+    imposta(Impostazioni(strato=5, otlp=otlp))  # gli strumenti delle metriche, con l'esportazione al collector
     metriche.fai_metriche()
-    cerca = cerca_in_tempo(a.tempo)
-    for cartella in a.cartelle:
-        if not a.ancora and gia_in_tempo(cartella.name, cerca):
+    cerca = cerca_in_tempo(tempo)
+    for cartella in cartelle:
+        if not ancora and gia_in_tempo(cartella.name, cerca):
             raise SystemExit(f"{cartella.name} e' gia' in Tempo nell'ultima ora: rimandarla raddoppia i conteggi "
                              "(--ancora per farlo comunque, oppure docker compose down -v e di nuovo up)")
         for f in sorted(cartella.glob("*.json")):

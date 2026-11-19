@@ -1,21 +1,21 @@
-"""Esegue su Tempo le query del cruscotto e confronta ogni numero con segnali.py. Uso: python verifica_cruscotto.py CARTELLA ...
+"""Esegue su Tempo le query del cruscotto e confronta ogni numero con segnali.py.
 
 Le query si leggono da cruscotto/grafana/segnali.json, per refId: cosi' si verifica il cruscotto che si mostra,
-non una sua copia. Serve lo stack acceso (docker compose -f cruscotto/compose.yaml up -d) e i dati di tempo.py.
+non una sua copia. Serve lo stack acceso (docker compose -f cruscotto/compose.yaml up -d) e i dati di invio.
 """
 import json
 import statistics
-import sys
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-import segnali as sg
-import tempo
+from ..analisi import segnali as sg
+from . import invio as tempo
 
 TEMPO = "http://localhost:3210"
-CRUSCOTTO = Path(__file__).parent / "cruscotto" / "grafana" / "segnali.json"
+RADICE = Path(__file__).resolve().parents[2]
+CRUSCOTTO = RADICE / "cruscotto" / "grafana" / "segnali.json"
 
 
 def query_del_cruscotto() -> dict[str, str]:
@@ -98,7 +98,7 @@ def da_segnali(regs: list[dict]) -> dict:
 
 
 def versioni_da_segnali(regs: list[dict]) -> dict:
-    """Come il pannello delle versioni, dalle registrazioni: la modalita' e l'hash sono quelli che tempo.py scrive sulla radice."""
+    """Come il pannello delle versioni, dalle registrazioni: la modalita' e l'hash sono quelli che invio scrive sulla radice."""
     gruppi = {}
     for r in regs:
         v, g = tempo.versione_della_registrazione(r), sg.segnali(r)
@@ -109,9 +109,9 @@ def versioni_da_segnali(regs: list[dict]) -> dict:
     return {c: confronto(rr) for c, rr in gruppi.items()}
 
 
-if __name__ == "__main__":
+def verifica(cartelle: list[Path]) -> int:
+    """Confronta il cruscotto con i segnali: torna il numero di valori diversi (0 se tutto torna)."""
     query, sbagliati = query_del_cruscotto(), 0
-    cartelle = [Path(c) for c in sys.argv[1:]]
     # ogni cartella da sola, e (se sono piu' d'una) tutte insieme: la variabile cartella del cruscotto e' multi-valore
     gruppi = [[c] for c in cartelle] + ([cartelle] if len(cartelle) > 1 else [])
     for gruppo in gruppi:
@@ -127,4 +127,4 @@ if __name__ == "__main__":
                 sbagliati += not ok
                 print(f"{nome:<28} {modo:<6} {k:<10} {'uguale' if ok else 'DIVERSO'}  segnali {atteso[k]}"
                       + ("" if ok else f"  cruscotto {visto[k]}"))
-    sys.exit(1 if sbagliati else 0)
+    return 1 if sbagliati else 0

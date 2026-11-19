@@ -33,14 +33,11 @@ La pipeline fissa, la variante A (agente come strumento) e il tool runner sono n
 import argparse
 import datetime as dt
 import json
-import re
 import statistics
-import textwrap
 from pathlib import Path
 
 from dotenv import load_dotenv
 from osservare_a_strati import esecuzione as esecuzione_mod, registrazioni as registrazioni_mod
-from osservare_a_strati.agenti import ciclo as ciclo_mod, prompt as prompt_mod, strumenti as strumenti_mod
 from osservare_a_strati.agenti.ciclo import (CATENA, PROFONDITA_MAX, agente, chiama_agente, ciclo, controlla_catena,
                                              esegui_chiamate, esegui_strumento, richiesta_di_verifica)
 from osservare_a_strati.agenti.prompt import (CORREZIONE_AVVISI, CORREZIONE_COORDINA, CORREZIONE_DIALOGO,
@@ -57,8 +54,7 @@ from osservare_a_strati.valutazione import (APPROVA, AVVISI_CAUSA, AVVISI_NEGA, 
                                             CLASSI_DOMANDA, ESITI, _CONFINE_CLAUSOLA, _QUATTORDICI_POSSIBILE,
                                             _QUINDICI_SUPERATO, _avverte, _clausole, approva, classe_domanda,
                                             riporta_avviso, valuta)
-from osservare_a_strati.impostazioni import NOMI_CORREZIONE, TITOLI, Impostazioni, attuali, con, imposta
-from osservare_a_strati.osservabilita import client as osservabilita_client
+from osservare_a_strati.impostazioni import NOMI_CORREZIONE, Impostazioni, attuali, con, imposta
 from osservare_a_strati.osservabilita import log as osservabilita_log
 from osservare_a_strati.osservabilita import metriche, tracce
 from osservare_a_strati.osservabilita.client import cliente
@@ -77,6 +73,7 @@ from osservare_a_strati.analisi.span import (  # noqa: F401
     costo_per_agente, dialogo, dialogo_riporta, domande_ad_avvisi, figli_arco, grafo, in_ordine, pagine_avvisi,
     pagine_ricontrolli, per_trace, profondita_agenti, quota_avvisi, quota_riletture, sale_da_due, stesso_giro,
     strumenti, token, token_per_agente, verdetti)
+from osservare_a_strati.righe import codice, righe
 from osservare_a_strati.stampa import (  # noqa: F401
     COLORI, albero, breve, c, cascata, colore, con_email, contenuto, mostra, mostra_metriche, ms, verbale)
 
@@ -105,49 +102,6 @@ def __getattr__(nome):
         return getattr(modulo, campo)
     raise AttributeError(f"module {__name__!r} has no attribute {nome!r}")
 
-
-
-FILE_CON_MARCATORI = (tracce.__file__, osservabilita_log.__file__, metriche.__file__, osservabilita_client.__file__,
-                      strumenti_mod.__file__, ciclo_mod.__file__, esecuzione_mod.__file__, prompt_mod.__file__,
-                      registrazioni_mod.__file__, __file__)
-
-
-def _righe_di(percorso: str) -> list[str]:
-    return Path(percorso).read_text().splitlines()
-
-
-def righe():
-    """Le righe di codice di ogni strato, contate dai marcatori sN dopo il cancelletto."""
-    testo = [r for percorso in FILE_CON_MARCATORI for r in _righe_di(percorso)]
-    for n in range(6):
-        marcate = [r for r in testo if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith("#")]
-        print(f"strato {n} · {TITOLI[n]:<28} {len(marcate):>3} righe")
-
-
-def codice(n: int) -> str:
-    """Le righe dello strato n come si scriverebbero senza l'impalcatura della demo, per le slide."""
-    fuori = []
-    for percorso in FILE_CON_MARCATORI:
-        testo = _righe_di(percorso)
-        marcate = [i for i, r in enumerate(testo) if re.search(rf"#\s*s{n}\b", r) and not r.lstrip().startswith("#")]
-        blocchi = []
-        for i in marcate:
-            if blocchi and not "".join(testo[blocchi[-1][-1] + 1:i]).strip():  # in mezzo solo righe vuote
-                blocchi[-1].extend(range(blocchi[-1][-1] + 1, i + 1))
-            else:
-                blocchi.append([i])
-        for blocco in blocchi:
-            righe_, rientro_if = [], None
-            for i in blocco:
-                r = re.sub(rf"\s+#\s*s{n}\b.*$", "", testo[i]).replace(f"tracer({n}).", "tracer.").replace(", **prova)", ")")
-                if re.match(rf"\s*if attuali\(\)\.strato >= {n}:", r):
-                    rientro_if = len(r) - len(r.lstrip())
-                    continue
-                if rientro_if is not None and len(r) - len(r.lstrip()) > rientro_if:
-                    r = r[4:]
-                righe_.append(r)
-            fuori.append(textwrap.dedent("\n".join(righe_)))
-    return "\n...\n".join(fuori)
 
 
 if __name__ == "__main__":
