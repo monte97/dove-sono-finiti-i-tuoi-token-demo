@@ -3,6 +3,7 @@ import threading
 
 from opentelemetry.sdk.trace import SpanProcessor
 
+from ..analisi.segnali import riassunto
 from ..registrazioni import ID_ACCOUNT, in_dict  # noqa: F401
 
 
@@ -20,7 +21,6 @@ class RiassuntoSullaRadice(SpanProcessor):
                 self.radici[span.context.trace_id] = span
 
     def on_end(self, span):
-        from segnali import riassunto  # segnali importa strati, che importa questo modulo: solo qui, a run avviata
         tid = span.context.trace_id
         with self.lock:
             radice = self.radici.get(tid)

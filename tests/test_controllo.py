@@ -17,7 +17,7 @@ from server_finto import *  # noqa: F401,F403
 def test_controllo_salta_il_formato_vecchio():
     import tempfile, json
     from pathlib import Path
-    import controllo
+    from osservare_a_strati.analisi import controllo
     d = Path(tempfile.mkdtemp())
     (d / "vecchia.json").write_text(json.dumps({**run(), "dominio": "orario"}))
     (d / "senza-log.json").write_text(json.dumps(run()))
@@ -41,7 +41,7 @@ def test_controllo_salta_il_formato_vecchio():
 
 
 def test_soglie_del_controllo():
-    import controllo as k
+    from osservare_a_strati.analisi import controllo as k
     guasto = lambda g, sb: {"giuste": g, "sbagliate": sb}
     assert k.fuori_soglia(guasto(0.0, 22 / 30), "guasto", "banco") == []
     assert k.fuori_soglia(guasto(1 / 30, 22 / 30), "guasto", "banco")      # una giusta nel banco: fuori
@@ -54,7 +54,7 @@ def test_soglie_del_controllo():
 
 
 def test_il_banco_del_5_11_sta_dentro_le_soglie():
-    import controllo as k
+    from osservare_a_strati.analisi import controllo as k
     for modo in ("guasto", "sana"):
         regs = k.leggi(k.BANCO / "strato-5", modo)
         if not regs:

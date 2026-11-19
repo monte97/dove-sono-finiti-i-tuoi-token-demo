@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .agenti.ciclo import agente
 from .agenti.prompt import istruzioni_coordina, versione, versione_prompt
+from .analisi.misure import banco
 from .evento.dati import DOMANDA
 from .impostazioni import NOMI_CORREZIONE, attuali
 from .modello import MODEL
@@ -77,7 +78,6 @@ def esegui_banco(n: int, guasto: bool, cartella: Path, client=None) -> tuple[lis
 
 def concludi_banco(n: int, riuscite: list, fallite: int):
     """Stampa il banco; se una run e' fallita esce con stato 1 (uno script o una pipeline se ne accorge)."""
-    from strati import banco
     banco(riuscite)
     if fallite:
         print(f"\nrun fallite: {fallite} su {n} (non registrate)")
