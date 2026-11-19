@@ -73,7 +73,7 @@ l'estrazione.
 
 ## I test
 
-`tests/` ha un file per argomento (strumenti, valutazione, misure, schema, segnali, cruscotto, esecuzione, controllo,
+`tests/` ha un file per argomento (strati, strumenti, valutazione, misure, schema, segnali, cruscotto, esecuzione, controllo,
 CLI, righe). Girano su `tests/server_finto.py`, un server finto che risponde come l'API Anthropic: non serve rete né
 chiave. `tests/riferimento.py` è la rete di sicurezza del riordino: rigenera le uscite della demo (replay, misure,
 schema, segnali, invio al cruscotto, righe, codice, hash dei prompt) per confrontarle con quelle di prima.
