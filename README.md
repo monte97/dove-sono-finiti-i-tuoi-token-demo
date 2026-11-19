@@ -87,6 +87,7 @@ Ogni strato contiene i precedenti. Le righe che esistono solo per osservare fini
 
 ## Dove leggere il resto
 
+- [docs/architettura.md](docs/architettura.md): come una richiesta attraversa il pacchetto, dove stanno le righe di ogni strato, lo stato condiviso.
 - [docs/caso.md](docs/caso.md): il caso per esteso, il criterio, gli agenti, la correzione, il sistema precedente.
 - [docs/strati.md](docs/strati.md): i marcatori, il fatto sull'SDK, log e metriche, lo schema del sistema.
 - [docs/cruscotto.md](docs/cruscotto.md): il cruscotto, le misure, come rifare le run e il banco, i diciassette alberi.
