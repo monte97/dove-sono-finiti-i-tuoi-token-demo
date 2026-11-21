@@ -1,14 +1,23 @@
 # Osservare a strati
 
-> **Lavori in corso.** Il talk è del 28 novembre 2026: codice, registrazioni e numeri possono cambiare fino ad allora; qualche documento in `docs/` è ancora una bozza e le slide arriveranno dopo il talk.
+> **Lavori in corso.** Il talk va in scena il 25 novembre 2026 a Modena Full Stack e il 28 novembre a DevFest Alps: codice, registrazioni e numeri possono cambiare fino ad allora, e qualche documento in `docs/` è ancora una bozza.
 
 La demo del talk «Dove sono finiti i tuoi token? Tracciare un sistema multi-agente con OpenTelemetry»
-(DevFest Alps 2026, Torino). Un assistente a cinque agenti risponde a una domanda semplice con un orario
+(Modena Full Stack, 25 novembre 2026, e DevFest Alps 2026, Torino, 28 novembre). Un assistente a cinque agenti risponde a una domanda semplice con un orario
 sbagliato e un `200 OK`, e lo si guarda con sei livelli di strumentazione: ogni strato aggiunge poche righe di
 codice e mostra qualcosa in più della stessa risposta.
 
 Il caso è costruito e il guasto è messo apposta. Le decisioni del modello no: quelle sono registrate da run
 vere con Claude Haiku 5.5 (`claude-haiku-5-5`).
+
+## Le slide
+
+| evento | PDF |
+|---|---|
+| Modena Full Stack, Modena, 25 novembre 2026 | [slide/modena-full-stack-2026.pdf](slide/modena-full-stack-2026.pdf) |
+| DevFest Alps 2026, Torino, 28 novembre 2026 | [slide/devfest-alps-2026.pdf](slide/devfest-alps-2026.pdf) |
+
+Le due versioni sono uguali, cambiano solo la copertina e il QR. La richiesta di Giulia che il talk segue è `registrazioni/strato-5/20261105-202614-guasto.json`: `make giulia` la rigioca.
 
 ## Il caso
 
@@ -60,6 +69,7 @@ I comandi `strati` qui e nei documenti si danno con l'ambiente attivo (`source .
 | `osservare_a_strati/cruscotto/` | rimando a Tempo, Loki e Prometheus, e verifica del cruscotto |
 | `cruscotto/` | compose e configurazioni di collector, Tempo, Loki, Prometheus e Grafana |
 | `registrazioni/` | il banco del 5/11, con una cartella per strato e per correzione |
+| `slide/` | le slide del talk in PDF, una per evento |
 | `docs/` | la documentazione; `docs/banco/` ha metodo, numeri, uscite e diciassette-alberi |
 | `tests/` | pytest e il server finto |
 | `pyproject.toml`, `requirements.txt` | pacchetto e dipendenze bloccate |
