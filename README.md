@@ -67,7 +67,7 @@ I comandi `strati` qui e nei documenti si danno con l'ambiente attivo (`source .
 | `osservare_a_strati/osservabilita/` | tracce, log, metriche, client e riassunto della richiesta |
 | `osservare_a_strati/analisi/` | lettura degli span, misure, schema, segnali, controllo |
 | `osservare_a_strati/cruscotto/` | rimando a Tempo, Loki e Prometheus, e verifica del cruscotto |
-| `cruscotto/` | compose e configurazioni di collector, Tempo, Loki, Prometheus e Grafana |
+| `cruscotto/` | compose e configurazioni di collector, Tempo, Loki, Prometheus e Grafana; `collector-leve.yaml` con le leve dell'atto 4 |
 | `registrazioni/` | il banco del 5/11, con una cartella per strato e per correzione |
 | `slide/` | le slide del talk in PDF, una per evento |
 | `docs/` | la documentazione; `docs/banco/` ha metodo, numeri, uscite e diciassette-alberi |
@@ -89,6 +89,21 @@ I comandi `strati` qui e nei documenti si danno con l'ambiente attivo (`source .
 
 Ogni strato contiene i precedenti. Le righe che esistono solo per osservare finiscono con un marcatore (`# s3`):
 `strati righe` le conta, `strati codice N` stampa quelle dello strato N.
+
+## Le leve per il costo dell'osservabilità
+
+L'atto 4 del talk: il testo acceso pesa più di metà di una trace, e si taglia nel Collector.
+`cruscotto/collector-leve.yaml` è la configurazione d'esempio, validata con `otelcol-contrib validate` (0.130.0):
+
+- `traces/anomale`: le trace con una chiamata al modello sopra i 10.000 token in ingresso (`tail_sampling` con
+  `numeric_attribute` su `gen_ai.usage.input_tokens`) restano tutte, con il testo;
+- `traces/altre`: tutte le altre (la stessa policy con `invert_match: true`) passano al 20% (`probabilistic`) e
+  senza testo (`transform` che cancella `gen_ai.input.messages`, `gen_ai.output.messages`,
+  `gen_ai.system_instructions` e `gen_ai.tool.call.result`).
+
+Le metriche dei token non passano dal campionamento: i conti restano interi. La soglia di 10.000 vale per questa
+demo: la propria si trova negli span delle chiamate sane, con margine. Per provarla, in `cruscotto/compose.yaml`
+si monta `collector-leve.yaml` al posto di `collector.yaml`.
 
 ## I comandi principali
 
